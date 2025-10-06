@@ -1,5 +1,4 @@
-
-// Learn4Good.com jobs scraper (CheerioCrawler)
+// Learn4Good.com jobs scraper (CheerioCrawler) - FIXED VERSION
 import { Actor, log } from 'apify';
 import { CheerioCrawler, Dataset } from 'crawlee';
 
@@ -29,45 +28,41 @@ const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) 
 
 // ------------------------- HELPERS -------------------------
 const buildStartUrl = (kw, loc, date) => {
-    // Learn4Good URL pattern: https://www.learn4good.com/jobs/language/english/search/engineering/
-    const baseUrl = 'https://www.learn4good.com/jobs/language/english/search';
+    // Learn4Good uses PHP-style query parameters for search
+    const baseUrl = 'https://www.learn4good.com/jobs/index.php';
+    const params = new URLSearchParams();
     
-    let url = baseUrl;
+    params.set('controller', 'job_list');
+    params.set('action', 'display_search_results');
+    params.set('page_number', '1');
     
     if (kw) {
-        // Clean and format keyword for URL
-        const cleanKeyword = kw.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
-        url += `/${cleanKeyword}`;
+        // Keywords go into 'what' parameter
+        params.set('what', kw.trim());
     }
     
     if (loc) {
-        // Add location if provided
-        const cleanLocation = loc.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
-        url += `/${cleanLocation}`;
+        // Location goes into 'where' parameter
+        params.set('where', loc.trim());
     }
     
-    url += '/'; // Always end with slash
-    
-    // Add query parameters for date filtering if needed
+    // Add date filtering if needed
     if (date && date !== 'anytime') {
-        const params = new URLSearchParams();
         const dateMap = {
             '24h': '1',
-            '7d': '7', 
+            '7d': '7',
             '30d': '30',
         };
         if (dateMap[date]) {
-            params.set('days', dateMap[date]);
-        }
-        if (params.toString()) {
-            url += '?' + params.toString();
+            params.set('days_posted', dateMap[date]);
         }
     }
     
-    return url;
+    return `${baseUrl}?${params.toString()}`;
 };
 
 const toAbs = (href) => {
+    if (!href) return null;
     try {
         return new URL(href, 'https://www.learn4good.com').href;
     } catch {
@@ -79,19 +74,19 @@ const htmlToText = (html) => {
     if (!html) return '';
     
     return html
-        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '') // Remove scripts
-        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')   // Remove styles
-        .replace(/<br\s*\/?>/gi, '\n')                    // BR to newline
-        .replace(/<\/(p|div|li|h\d|tr)>/gi, '\n')        // Block elements to newline
-        .replace(/<[^>]+>/g, '')                          // Remove all HTML tags
-        .replace(/&nbsp;/gi, ' ')                         // Convert &nbsp; to space
-        .replace(/&amp;/gi, '&')                          // Convert &amp; to &
-        .replace(/&lt;/gi, '<')                           // Convert &lt; to <
-        .replace(/&gt;/gi, '>')                           // Convert &gt; to >
-        .replace(/&quot;/gi, '"')                         // Convert &quot; to "
-        .replace(/&#\d+;/g, '')                           // Remove numeric entities
-        .replace(/\n\s*\n/g, '\n')                        // Multiple newlines to single
-        .replace(/\s{2,}/g, ' ')                          // Multiple spaces to single
+        .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
+        .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
+        .replace(/<br\s*\/?>/gi, '\n')
+        .replace(/<\/(p|div|li|h\d|tr)>/gi, '\n')
+        .replace(/<[^>]+>/g, '')
+        .replace(/&nbsp;/gi, ' ')
+        .replace(/&amp;/gi, '&')
+        .replace(/&lt;/gi, '<')
+        .replace(/&gt;/gi, '>')
+        .replace(/&quot;/gi, '"')
+        .replace(/&#\d+;/g, '')
+        .replace(/\n\s*\n+/g, '\n\n')
+        .replace(/[ \t]+/g, ' ')
         .trim();
 };
 
@@ -99,9 +94,9 @@ const cleanText = (text) => {
     if (!text) return 'N/A';
     
     return text
-        .replace(/\s+/g, ' ')                             // Multiple spaces to single
-        .replace(/^\s*[-•]\s*/, '')                       // Remove leading bullets
-        .replace(/\n+/g, ' ')                             // Newlines to spaces
+        .replace(/\s+/g, ' ')
+        .replace(/^\s*[-•]\s*/, '')
+        .replace(/\n+/g, ' ')
         .trim() || 'N/A';
 };
 
@@ -120,26 +115,26 @@ let pagesVisited = 0;
 // ------------------------- CRAWLER -------------------------
 const crawler = new CheerioCrawler({
     proxyConfiguration: proxyConf,
-    maxRequestsPerMinute: 60,  // Reduced to be more conservative
+    maxRequestsPerMinute: 40,
     requestHandlerTimeoutSecs: 120,
     navigationTimeoutSecs: 90,
-    maxConcurrency: 5,  // Reduced concurrency
+    maxConcurrency: 3,
     useSessionPool: true,
     persistCookiesPerSession: true,
     sessionPoolOptions: {
-        maxPoolSize: 20,
+        maxPoolSize: 15,
         sessionOptions: {
-            maxUsageCount: 30,
-            maxErrorScore: 5,
+            maxUsageCount: 40,
+            maxErrorScore: 3,
         },
     },
     maxRequestRetries: 3,
 
     preNavigationHooks: [
-        ({ request, session }) => {
+        ({ request }) => {
             request.headers = {
                 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate, br',
                 'DNT': '1',
@@ -152,7 +147,6 @@ const crawler = new CheerioCrawler({
                 'Cache-Control': 'max-age=0',
             };
             
-            // Add custom cookies if provided
             if (cookies) {
                 request.headers['Cookie'] = cookies;
             }
@@ -162,7 +156,7 @@ const crawler = new CheerioCrawler({
     async requestHandler({ request, $, log: crawlerLog, enqueueLinks, session }) {
         const { label = 'LIST' } = request.userData;
 
-        // Check for block page indicators
+        // Check for block/captcha pages
         const title = $('title').text();
         const bodyText = $('body').text();
         
@@ -172,94 +166,39 @@ const crawler = new CheerioCrawler({
             bodyText.includes('Cloudflare') ||
             bodyText.includes('Ray ID:')) {
             
-            crawlerLog.warning(`Detected blocking page. Title: ${title.substring(0, 100)}`);
-            session.retire(); // Retire the session that got blocked
-            throw new Error(`Blocked on page ${request.url}, retiring session.`);
+            crawlerLog.warning(`Detected blocking page. Retiring session.`);
+            session.retire();
+            throw new Error(`Blocked on ${request.url}`);
         }
 
         if (label === 'LIST') {
             pagesVisited++;
             crawlerLog.info(`Processing LIST page ${pagesVisited}/${MAX_PAGES}: ${request.url}`);
             
-            // Debug: Log page title and basic info
-            const pageTitle = $('title').text();
-            const bodyText = $('body').text().substring(0, 200);
-            crawlerLog.info(`Page title: ${pageTitle}`);
-            crawlerLog.info(`Body preview: ${bodyText}...`);
-            
             const jobLinks = [];
             
-            // Learn4Good specific job link patterns - be more precise
-            const excludePatterns = [
-                '/register', '/registration', '/login', '/site-login', '/enter.htm',
-                '/faqs', '/employer', '/search/advanced', '/jobseeker_faqs', '/employer_faqs',
-                '/language/english/registration', '/jobs/language/english/registration',
-                'post-jobs', 'apply-for-jobs', 'job-search-engine'
-            ];
-            
-            // Cast a wider net to find more job links
-            // Method 1: Look for links that go to job detail pages
+            // Learn4Good wraps each job in a specific structure
+            // Look for job links that match the pattern: /jobs/{location}/{country}/{category}/{id}/e/
             $('a').each((_, el) => {
                 const href = $(el).attr('href');
-                const linkText = cleanText($(el).text());
+                if (!href) return;
                 
-                if (href && linkText !== 'N/A' && linkText.length > 3) {
+                // Match job detail URLs (they contain job ID and end with /e/ or /e)
+                if (href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?/)) {
                     const fullUrl = toAbs(href);
-                    const isExcluded = excludePatterns.some(pattern => href.toLowerCase().includes(pattern));
-                    
-                    // Check if URL pattern suggests a job posting
-                    const isJobUrl = href.includes('/job') || href.includes('/position') || href.includes('/vacancy') ||
-                                    href.match(/\/\d+/) || // URLs with numbers (often job IDs)
-                                    href.includes('apply');
-                    
-                    // Check if link text suggests a job
-                    const hasJobWords = /\b(job|position|vacancy|role|career|opportunity|hire|recruit|work|employment)\b/i.test(linkText);
-                    const hasJobTitles = /\b(manager|engineer|developer|analyst|specialist|coordinator|assistant|director|officer|consultant|technician|supervisor|representative|associate|administrator|teacher|nurse|accountant|sales|marketing|designer|writer|chef|driver|mechanic|electrician|plumber|cashier|receptionist|clerk|intern)\b/i.test(linkText);
-                    
-                    // Exclude obvious navigation
-                    const isNotNavigation = !/(register|login|search|faq|post|apply now|click here|more info|home|about|contact|privacy|terms|help|support)/i.test(linkText);
-                    const isNotCountryList = !/(albania|algeria|andorra|angola|argentina|australia|austria|bahrain|bangladesh|belgium|brazil|canada|china|denmark|egypt|france|germany|india|italy|japan|korea|malaysia|mexico|netherlands|norway|pakistan|poland|portugal|russia|singapore|spain|sweden|switzerland|thailand|ukraine|vietnam)/i.test(linkText);
-                    
-                    if (!isExcluded && fullUrl && !jobLinks.includes(fullUrl) && isNotNavigation && isNotCountryList) {
-                        // If it's clearly a job URL or has job-related text, include it
-                        if (isJobUrl || hasJobWords || hasJobTitles || 
-                            (linkText.length > 15 && linkText.length < 200)) { // Reasonable length for job titles
+                    if (fullUrl && !jobLinks.includes(fullUrl)) {
+                        const linkText = cleanText($(el).text());
+                        if (linkText !== 'N/A' && linkText.length > 3) {
                             jobLinks.push(fullUrl);
-                            crawlerLog.info(`Found job: "${linkText.length > 60 ? linkText.substring(0, 60) + '...' : linkText}" -> ${href}`);
                         }
                     }
                 }
             });
-            
-            // Method 2: Look specifically in job listing containers
-            $('table, .jobs, .listings, .results, .job-list, .job-results').each((_, container) => {
-                $(container).find('a').each((_, el) => {
-                    const href = $(el).attr('href');
-                    const linkText = cleanText($(el).text());
-                    
-                    if (href && linkText !== 'N/A' && linkText.length > 5) {
-                        const fullUrl = toAbs(href);
-                        const isExcluded = excludePatterns.some(pattern => href.toLowerCase().includes(pattern));
-                        
-                        if (!isExcluded && fullUrl && !jobLinks.includes(fullUrl)) {
-                            jobLinks.push(fullUrl);
-                            crawlerLog.info(`Found job in container: "${linkText.substring(0, 50)}..." -> ${href}`);
-                        }
-                    }
-                });
-            });
 
-            crawlerLog.info(`LIST page: Found ${jobLinks.length} jobs on ${request.url}`);
+            crawlerLog.info(`Found ${jobLinks.length} job links on page ${pagesVisited}`);
 
             if (jobLinks.length === 0) {
-                crawlerLog.warning('No jobs found on this page. This might be the end of the results.');
-                // Debug: Log all links found on page
-                const allLinks = [];
-                $('a').each((_, el) => {
-                    const href = $(el).attr('href');
-                    if (href) allLinks.push(href);
-                });
-                crawlerLog.info(`All links on page (first 10): ${allLinks.slice(0, 10).join(', ')}`);
+                crawlerLog.warning('No jobs found. May have reached end of results.');
             }
 
             const remainingSlots = MAX_JOBS - jobsScraped;
@@ -270,105 +209,48 @@ const crawler = new CheerioCrawler({
                     urls: linksToEnqueue,
                     userData: { label: 'DETAIL' },
                 });
+                crawlerLog.info(`Enqueued ${linksToEnqueue.length} detail pages`);
             } else if (!collectDetails) {
-                // Save job data from listing page only
+                // Extract basic data from listing page
                 for (const jobLink of linksToEnqueue) {
-                    // Find the job element containing this link
-                    let jobElement = $(`a[href="${jobLink}"]`).first();
-                    if (jobElement.length === 0) {
-                        const linkPart = jobLink.split('/').pop();
-                        jobElement = $(`a[href*="${linkPart}"]`).first();
-                    }
+                    const linkElement = $(`a[href*="${jobLink.split('/').slice(-3).join('/')}"]`).first();
                     
-                    if (jobElement.length === 0) {
-                        crawlerLog.warning(`Could not find element for job link: ${jobLink}`);
-                        continue;
-                    }
+                    if (linkElement.length === 0) continue;
                     
-                    // Get the job title from the link text
-                    let title = cleanText(jobElement.text());
+                    const title = cleanText(linkElement.text());
                     
-                    // Find the container (table row, list item, or div)
-                    let container = jobElement.closest('tr, li, div');
-                    if (container.length === 0) {
-                        container = jobElement.parent();
-                    }
+                    // Try to find associated metadata near the link
+                    const container = linkElement.closest('div, article, section, li');
+                    const containerText = container.text();
                     
+                    // Extract company (usually follows "Listing for:")
                     let company = 'N/A';
-                    let location = 'N/A';
-                    let salary = 'N/A';
-                    let job_type = 'N/A';
-                    let date_posted = null;
+                    const companyMatch = containerText.match(/Listing for:\s*([^\n]+)/);
+                    if (companyMatch) {
+                        company = cleanText(companyMatch[1]);
+                    }
                     
-                    // For table rows (most common Learn4Good pattern)
-                    if (container.is('tr')) {
-                        const cells = container.find('td');
-                        crawlerLog.info(`Found ${cells.length} cells in row`);
-                        
-                        // Log cell contents for debugging
-                        cells.each((i, cell) => {
-                            const cellText = cleanText($(cell).text());
-                            crawlerLog.info(`Cell ${i}: "${cellText}"`);
-                        });
-                        
-                        // Extract data based on typical Learn4Good table structure
-                        if (cells.length >= 2) {
-                            // Usually: Title | Company/Details | Location/Salary | Date/Type
-                            for (let i = 1; i < cells.length; i++) {
-                                const cellText = cleanText($(cells[i]).text());
-                                
-                                // Check if this cell contains company info
-                                if (company === 'N/A' && cellText.length > 2 && 
-                                    !cellText.match(/^\$|\d+k|\d+,\d+|per hour|hourly|annual|full.?time|part.?time|contract|temporary/i) &&
-                                    !cellText.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w+\s+\d{1,2},?\s+\d{4}/)) {
-                                    company = cellText;
-                                }
-                                
-                                // Check if this cell contains location info (city, state patterns)
-                                if (location === 'N/A' && cellText.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z]{2,})?/)) {
-                                    location = cellText;
-                                }
-                                
-                                // Check if this cell contains salary info
-                                if (salary === 'N/A' && cellText.match(/\$|\d+k|\d+,\d+|per hour|hourly|annual/i)) {
-                                    salary = cellText;
-                                }
-                                
-                                // Check if this cell contains job type
-                                if (job_type === 'N/A' && cellText.match(/\b(full.?time|part.?time|contract|temporary|permanent|freelance|internship|remote|on.?site|hybrid)\b/i)) {
-                                    job_type = cellText;
-                                }
-                                
-                                // Check if this cell contains date posted
-                                if (!date_posted && cellText.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w+\s+\d{1,2},?\s+\d{4}/)) {
-                                    date_posted = cellText;
-                                }
-                            }
-                        }
-                    } else {
-                        // For non-table structures, look for specific classes or patterns
-                        const allText = container.text();
-                        const textParts = allText.split(/[|\n-]/);
-                        
-                        textParts.forEach(part => {
-                            const cleanPart = cleanText(part);
-                            if (cleanPart.length > 2) {
-                                if (company === 'N/A' && !cleanPart.match(/\$|\d+k|per hour/i)) {
-                                    company = cleanPart;
-                                } else if (location === 'N/A') {
-                                    location = cleanPart;
-                                }
-                            }
-                        });
+                    // Extract location (usually follows "Job in")
+                    let location = 'N/A';
+                    const locationMatch = containerText.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
+                    if (locationMatch) {
+                        location = cleanText(locationMatch[1]);
+                    }
+                    
+                    // Extract date if visible
+                    let date_posted = null;
+                    const dateMatch = containerText.match(/Listed on\s+(\d{4}-\d{2}-\d{2})/);
+                    if (dateMatch) {
+                        date_posted = dateMatch[1];
                     }
                     
                     const item = {
-                        title: title,
-                        company: company,
-                        location: location,
-                        salary: salary !== 'N/A' ? salary : undefined,
-                        job_type: job_type !== 'N/A' ? job_type : undefined,
-                        date_posted: date_posted,
+                        title,
+                        company,
+                        location,
+                        salary: undefined,
+                        job_type: undefined,
+                        date_posted,
                         description_html: '',
                         description_text: '',
                         url: jobLink,
@@ -376,187 +258,182 @@ const crawler = new CheerioCrawler({
 
                     await Dataset.pushData(item);
                     jobsScraped++;
-                    crawlerLog.info(`✓ Job ${jobsScraped}/${MAX_JOBS}: "${title}" at "${company}" in "${location}"`);
+                    crawlerLog.info(`✓ Job ${jobsScraped}/${MAX_JOBS}: "${title}" at "${company}"`);
                     
                     if (jobsScraped >= MAX_JOBS) break;
                 }
             }
 
-            // Pagination - try multiple selectors for "Next" links
+            // Pagination - Learn4Good uses page_number parameter
             if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES) {
-                let nextPageLink = null;
-                
-                // Try different selectors for pagination
-                const nextSelectors = [
-                    'a:contains("Next")',
-                    'a:contains("next")', 
-                    'a:contains(">")',
-                    'a[title*="Next"]',
-                    'a[title*="next"]',
-                    '.next a',
-                    '.pagination a:last-child',
-                    'a[href*="page"]',
-                    'a[href*="start="]'
-                ];
-                
-                for (const selector of nextSelectors) {
-                    const link = $(selector).attr('href');
-                    if (link && !link.includes('javascript')) {
-                        nextPageLink = link;
-                        crawlerLog.info(`Found next page with selector: ${selector}`);
-                        break;
-                    }
-                }
-                
-                if (nextPageLink) {
-                    const fullNextUrl = toAbs(nextPageLink);
-                    await enqueueLinks({
-                        urls: [fullNextUrl],
-                        userData: { label: 'LIST' },
-                    });
-                    crawlerLog.info(`Enqueued next page: ${fullNextUrl}`);
-                } else {
-                    crawlerLog.info('No next page link found. Trying to construct next page...');
-                    
-                    // If no next link found, try to construct one
+                try {
                     const currentUrl = new URL(request.url);
-                    const pageParam = currentUrl.searchParams.get('page') || currentUrl.searchParams.get('start') || '0';
-                    const nextPage = parseInt(pageParam) + 1;
+                    const pageNum = parseInt(currentUrl.searchParams.get('page_number') || '1');
                     
-                    if (nextPage <= 10) { // Try up to 10 pages
-                        currentUrl.searchParams.set('page', nextPage.toString());
-                        const constructedUrl = currentUrl.href;
+                    // Check if there's a next page link
+                    let hasNextPage = false;
+                    
+                    // Look for "Next" or ">" links
+                    $('a').each((_, el) => {
+                        const href = $(el).attr('href');
+                        const text = $(el).text().trim();
+                        
+                        if (href && (text.toLowerCase().includes('next') || text === '>' || text === '»')) {
+                            hasNextPage = true;
+                            return false; // break
+                        }
+                    });
+                    
+                    // Also check if we have enough jobs to warrant a next page
+                    if (jobLinks.length > 5) {
+                        hasNextPage = true;
+                    }
+                    
+                    if (hasNextPage && pageNum < 50) { // Safety limit
+                        currentUrl.searchParams.set('page_number', (pageNum + 1).toString());
+                        const nextUrl = currentUrl.href;
                         
                         await enqueueLinks({
-                            urls: [constructedUrl],
+                            urls: [nextUrl],
                             userData: { label: 'LIST' },
                         });
-                        crawlerLog.info(`Constructed next page: ${constructedUrl}`);
+                        crawlerLog.info(`Enqueued next page (${pageNum + 1}): ${nextUrl}`);
                     } else {
-                        crawlerLog.info('Ending pagination - no more pages to try.');
+                        crawlerLog.info('No more pages to scrape.');
                     }
+                } catch (e) {
+                    crawlerLog.warning(`Pagination error: ${e.message}`);
                 }
-            } else if (pagesVisited >= MAX_PAGES) {
-                crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping pagination.`);
-            } else {
-                crawlerLog.info(`Reached job limit (${jobsScraped}/${MAX_JOBS}). Stopping pagination.`);
             }
         }
 
         if (label === 'DETAIL') {
             if (jobsScraped >= MAX_JOBS) {
-                crawlerLog.info(`Skipping detail page as results limit reached: ${request.url}`);
+                crawlerLog.info(`Skipping - limit reached: ${request.url}`);
                 return;
             }
 
-            crawlerLog.info(`Processing detail page: ${request.url}`);
+            crawlerLog.info(`Processing detail: ${request.url}`);
 
-            // Extract job title with better cleaning
-            let title = cleanText(
-                $('h1[itemprop="title"]').text() || 
-                $('h1').first().text() || 
-                $('.job-title, .jobtitle').first().text() ||
-                $('title').text().split('|')[0] ||
-                $('title').text().split('-')[0]
-            );
+            // Extract job title
+            let title = cleanText($('h1').first().text());
+            if (title === 'N/A') {
+                title = cleanText($('title').text().split('|')[0].split('-')[0]);
+            }
 
-            // Extract company name with better cleaning
-            let company = cleanText(
-                $('span[itemprop="name"]').text() || 
-                $('.company-name, .employer, .company').first().text() ||
-                $('strong:contains("Company"), b:contains("Company")').parent().text().replace(/Company:?\s*/i, '') ||
-                $('td:contains("Company:"), td:contains("Employer:")').next().text()
-            );
+            // Extract company - Look for "Listing for:"
+            let company = 'N/A';
+            $('*').each((_, el) => {
+                const text = $(el).text();
+                if (text.includes('Listing for:')) {
+                    const match = text.match(/Listing for:\s*([^\n]+)/);
+                    if (match) {
+                        company = cleanText(match[1]);
+                        return false; // break
+                    }
+                }
+            });
 
-            // Extract location with multiple strategies
-            let location = cleanText(
-                $('span[itemprop="addressLocality"]').text() || 
-                $('.location, .job-location, .city, .address').first().text() ||
-                $('strong:contains("Location"), b:contains("Location")').parent().text().replace(/Location:?\s*/i, '') ||
-                $('td:contains("Location:"), td:contains("City:"), td:contains("Address:")').next().text() ||
-                // Look in the job description for location patterns
-                ($('body').text().match(/Location:?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z]{2,})?)/i) || [])[1] ||
-                // Look for city, state patterns
-                ($('body').text().match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2,})\b/g) || [])[0]
-            );
+            // Extract location - Look for "Job in"
+            let location = 'N/A';
+            $('*').each((_, el) => {
+                const text = $(el).text();
+                if (text.includes('Job in')) {
+                    const match = text.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
+                    if (match) {
+                        location = cleanText(match[1]);
+                        return false; // break
+                    }
+                }
+            });
 
-            // Extract salary if available
-            let salary = cleanText(
-                $('.salary, .pay, .wage, .compensation').first().text() ||
-                $('strong:contains("Salary"), b:contains("Salary"), strong:contains("Pay"), b:contains("Pay")').parent().text().replace(/(Salary|Pay):?\s*/i, '') ||
-                $('td:contains("Salary:"), td:contains("Pay:"), td:contains("Wage:")').next().text() ||
-                // Look for salary patterns in text
-                ($('body').text().match(/(?:Salary|Pay|Wage|Compensation):?\s*[\$£€]?[\d,]+(?:\s*-\s*[\$£€]?[\d,]+)?(?:\s*per\s*(?:hour|year|month))?/i) || [])[0]
-            );
-            if (salary === 'N/A') salary = undefined;
+            // Extract job type - Look for "Full Time", "Part Time", etc.
+            let job_type = undefined;
+            const bodyText = $('body').text();
+            const typeMatch = bodyText.match(/\b(Full[\s-]?[Tt]ime|Part[\s-]?[Tt]ime|Contract|Temporary|Permanent|Freelance|Internship|Remote)\b/);
+            if (typeMatch) {
+                job_type = cleanText(typeMatch[1]);
+            }
 
-            // Extract job type (full-time, part-time, contract, etc.)
-            let job_type = cleanText(
-                $('.job-type, .employment-type, .type').first().text() ||
-                $('strong:contains("Type"), b:contains("Type"), strong:contains("Employment"), b:contains("Employment")').parent().text().replace(/(Type|Employment):?\s*/i, '') ||
-                $('td:contains("Type:"), td:contains("Employment:")').next().text() ||
-                // Look for job type patterns in text
-                ($('body').text().match(/\b(Full[\s-]?time|Part[\s-]?time|Contract|Temporary|Permanent|Freelance|Internship|Remote|On-site|Hybrid)\b/i) || [])[0]
-            );
-            if (job_type === 'N/A') job_type = undefined;
+            // Extract employment type from structured text
+            $('*').each((_, el) => {
+                const text = $(el).text();
+                if (text.includes('Employment type')) {
+                    const match = text.match(/Employment type[:\s]+([\w\s-]+)/);
+                    if (match) {
+                        job_type = cleanText(match[1]);
+                        return false;
+                    }
+                }
+            });
 
-            // Extract posted date with better patterns
-            let date_posted = cleanText(
-                $('meta[itemprop="datePosted"]').attr('content') || 
-                $('.date-posted, .job-date, .posted, .date').first().text() ||
-                $('strong:contains("Posted"), b:contains("Posted"), strong:contains("Date"), b:contains("Date")').parent().text().replace(/(Posted|Date):?\s*/i, '') ||
-                $('td:contains("Posted:"), td:contains("Date:")').next().text() ||
-                // Look for date patterns in text
-                ($('body').text().match(/(?:Posted|Date):?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4})/i) || [])[1]
-            );
-            if (date_posted === 'N/A') date_posted = null;
+            // Extract date posted - Look for "Listed on"
+            let date_posted = null;
+            $('*').each((_, el) => {
+                const text = $(el).text();
+                if (text.includes('Listed on')) {
+                    const match = text.match(/Listed on\s+(\d{4}-\d{2}-\d{2})/);
+                    if (match) {
+                        date_posted = match[1];
+                        return false;
+                    }
+                }
+            });
 
-            // Extract job description with better targeting
-            let descriptionContainer = null;
+            // Extract salary if present
+            let salary = undefined;
+            const salaryMatch = bodyText.match(/\$[\d,]+(?:\s*-\s*\$[\d,]+)?(?:\s*(?:per|\/)\s*(?:hour|year|month|annum))?/i);
+            if (salaryMatch) {
+                salary = cleanText(salaryMatch[0]);
+            }
+
+            // Extract job description
             let description_html = '';
             let description_text = '';
 
-            // Try structured data first
-            if ($('div[itemprop="description"]').length > 0) {
-                descriptionContainer = $('div[itemprop="description"]');
-            }
-            // Try common job description classes
-            else if ($('.job-description, .description, .job-content, .jobdescription').length > 0) {
-                descriptionContainer = $('.job-description, .description, .job-content, .jobdescription').first();
-            }
-            // Look for main content that's not navigation
-            else {
-                // Find the element with the most text that's not navigation
-                let bestElement = null;
-                let maxLength = 0;
-                
-                $('div, section, article').each((_, el) => {
-                    const $el = $(el);
-                    const text = $el.text().trim();
-                    const isNavigation = $el.find('a').length > text.length / 50; // Too many links = navigation
-                    
-                    if (!isNavigation && text.length > maxLength && text.length > 200) {
-                        maxLength = text.length;
-                        bestElement = $el;
-                    }
-                });
-                
-                if (bestElement) {
-                    descriptionContainer = bestElement;
-                }
-            }
+            // The main content is usually in the body, but we need to exclude navigation
+            // Find the longest text block that's not navigation
+            let bestContent = null;
+            let maxLength = 0;
 
-            if (descriptionContainer && descriptionContainer.length > 0) {
-                // Clean the HTML before converting to text
-                const cleanedContainer = descriptionContainer.clone();
-                cleanedContainer.find('script, style, nav, .navigation, .menu, header, footer').remove();
-                cleanedContainer.find('a').each((_, el) => {
-                    const $el = $(el);
-                    if ($el.text().length < 5) $el.remove(); // Remove short navigation links
-                });
+            $('div, section, article').each((_, el) => {
+                const $el = $(el);
                 
-                description_html = cleanedContainer.html() || '';
+                // Skip if it has too many links (navigation)
+                const linkCount = $el.find('a').length;
+                const textLength = $el.text().trim().length;
+                
+                if (linkCount < 10 && textLength > maxLength && textLength > 200) {
+                    // Check if it contains job-related keywords
+                    const text = $el.text().toLowerCase();
+                    if (text.includes('responsibilities') || 
+                        text.includes('requirements') || 
+                        text.includes('qualifications') ||
+                        text.includes('description') ||
+                        text.includes('key ') ||
+                        text.includes('experience')) {
+                        maxLength = textLength;
+                        bestContent = $el;
+                    }
+                }
+            });
+
+            if (bestContent) {
+                const cleaned = bestContent.clone();
+                // Remove navigation and ads
+                cleaned.find('script, style, nav, header, footer, .menu, .navigation, .ads, .advertisement').remove();
+                
+                description_html = cleaned.html() || '';
                 description_text = htmlToText(description_html);
+                
+                // Further clean the description text
+                const lines = description_text.split('\n').filter(line => {
+                    const trimmed = line.trim();
+                    // Remove very short lines and navigation-like text
+                    return trimmed.length > 20 && 
+                           !trimmed.match(/^(Home|Jobs|Search|Login|Register|Apply|View|Click|Back)$/i);
+                });
+                description_text = lines.join('\n\n').trim();
             }
 
             const item = {
@@ -582,12 +459,12 @@ const crawler = new CheerioCrawler({
     },
 });
 
-log.info('Starting scraper...');
+log.info('Starting Learn4Good scraper...');
 log.info(`Configuration: MAX_JOBS=${MAX_JOBS}, MAX_PAGES=${MAX_PAGES}, collectDetails=${collectDetails}`);
-log.info(`Input - startUrl: ${startUrl || 'Not provided'}, keyword: ${keyword || 'Not provided'}, location: ${location || 'Not provided'}`);
+log.info(`Search params - keyword: ${keyword || 'N/A'}, location: ${location || 'N/A'}, posted_date: ${posted_date}`);
 log.info(`Final Start URL: ${finalStartUrl}`);
 
 await crawler.run([finalStartUrl]);
-log.info(`✓ Scraping completed. Total jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
+log.info(`✓ Scraping completed. Jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
 
 await Actor.exit();
