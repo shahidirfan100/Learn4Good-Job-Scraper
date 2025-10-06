@@ -8,18 +8,24 @@ await Actor.init();
 // ------------------------- INPUT -------------------------
 const input = await Actor.getInput() ?? {};
 const {
+    startUrl = '',
     keyword = '',
     location = '',
     posted_date = 'anytime',
-    results_wanted: RESULTS_WANTED_RAW = 100,
+    collectDetails = true,
+    maxJobs: MAX_JOBS_RAW,
+    maxPages: MAX_PAGES_RAW,
+    cookies = '',
     proxyConfiguration,
 } = input;
 
-if (!keyword) {
-    throw new Error('INPUT error: The "keyword" field is required.');
+// Validate input
+if (!startUrl && !keyword) {
+    throw new Error('INPUT error: Either "startUrl" or "keyword" field is required.');
 }
 
-const RESULTS_WANTED = Number.isFinite(+RESULTS_WANTED_RAW) ? Math.max(1, +RESULTS_WANTED_RAW) : Number.MAX_SAFE_INTEGER;
+const MAX_JOBS = Number.isFinite(+MAX_JOBS_RAW) ? Math.max(1, +MAX_JOBS_RAW) : Number.MAX_SAFE_INTEGER;
+const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : Number.MAX_SAFE_INTEGER;
 
 // ------------------------- HELPERS -------------------------
 const buildStartUrl = (kw, loc, date) => {
@@ -60,7 +66,7 @@ const htmlToText = (html) => (html || '')
     .trim();
 
 // ------------------------- START URLS -------------------------
-const startUrl = buildStartUrl(keyword, location, posted_date);
+const finalStartUrl = startUrl || buildStartUrl(keyword, location, posted_date);
 
 // ------------------------- PROXY -------------------------
 const proxyConf = proxyConfiguration
@@ -69,6 +75,7 @@ const proxyConf = proxyConfiguration
 
 // ------------------------- SHARED STATE -------------------------
 let jobsScraped = 0;
+let pagesVisited = 0;
 
 // ------------------------- CRAWLER -------------------------
 const crawler = new CheerioCrawler({
@@ -82,11 +89,9 @@ const crawler = new CheerioCrawler({
     sessionPoolOptions: {
         maxPoolSize: 50,
         sessionOptions: {
-            maxUsageCount: 50, // Use each session more
+            maxUsageCount: 50,
             maxErrorScore: 3,
         },
-        // Rotate session on failure
-        maxSessionRotations: 10,
     },
 
     preNavigationHooks: [
@@ -105,6 +110,11 @@ const crawler = new CheerioCrawler({
                 'Sec-Fetch-User': '?1',
                 'Upgrade-Insecure-Requests': '1',
             };
+            
+            // Add custom cookies if provided
+            if (cookies) {
+                request.headers['Cookie'] = cookies;
+            }
         },
     ],
 
@@ -118,6 +128,9 @@ const crawler = new CheerioCrawler({
         }
 
         if (label === 'LIST') {
+            pagesVisited++;
+            crawlerLog.info(`Processing LIST page ${pagesVisited}/${MAX_PAGES}: ${request.url}`);
+            
             const jobLinks = [];
             $('a.job_link').each((_, el) => {
                 const href = $(el).attr('href');
@@ -132,18 +145,42 @@ const crawler = new CheerioCrawler({
                 crawlerLog.warning('No jobs found on this page. This might be the end of the results.');
             }
 
-            const remainingSlots = RESULTS_WANTED - jobsScraped;
+            const remainingSlots = MAX_JOBS - jobsScraped;
             const linksToEnqueue = jobLinks.slice(0, Math.max(0, remainingSlots));
 
-            if (linksToEnqueue.length > 0) {
+            if (collectDetails && linksToEnqueue.length > 0) {
                 await enqueueLinks({
                     urls: linksToEnqueue,
                     userData: { label: 'DETAIL' },
                 });
+            } else if (!collectDetails) {
+                // Save job data from listing page only
+                for (const jobLink of linksToEnqueue) {
+                    const jobElement = $(`a.job_link[href*="${jobLink.split('/').pop()}"]`).closest('.job-item, .job-listing, .job');
+                    const title = jobElement.find('h2, h3, .job-title').first().text().trim() || 'N/A';
+                    const company = jobElement.find('.company, .employer').first().text().trim() || 'N/A';
+                    const location = jobElement.find('.location, .job-location').first().text().trim() || 'N/A';
+                    
+                    const item = {
+                        title,
+                        company,
+                        location,
+                        date_posted: null,
+                        description_html: '',
+                        description_text: '',
+                        url: jobLink,
+                    };
+
+                    await Dataset.pushData(item);
+                    jobsScraped++;
+                    crawlerLog.info(`✓ Job ${jobsScraped}/${MAX_JOBS} saved (listing only): ${title}`);
+                    
+                    if (jobsScraped >= MAX_JOBS) break;
+                }
             }
 
             // Pagination
-            if (jobsScraped < RESULTS_WANTED) {
+            if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES) {
                 const nextPageLink = $('a:contains("Next")').attr('href');
                 if (nextPageLink) {
                     await enqueueLinks({
@@ -154,21 +191,25 @@ const crawler = new CheerioCrawler({
                 } else {
                     crawlerLog.info('No next page link found. Ending pagination.');
                 }
+            } else if (pagesVisited >= MAX_PAGES) {
+                crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping pagination.`);
             }
         }
 
         if (label === 'DETAIL') {
-            if (jobsScraped >= RESULTS_WANTED) {
+            if (jobsScraped >= MAX_JOBS) {
                 crawlerLog.info(`Skipping detail page as results limit reached: ${request.url}`);
                 return;
             }
 
-            const title = $('h1[itemprop="title"]').text().trim();
-            const company = $('span[itemprop="name"]').text().trim();
-            const location = $('span[itemprop="addressLocality"]').text().trim();
-            const date_posted = $('meta[itemprop="datePosted"]').attr('content');
+            const title = $('h1[itemprop="title"]').text().trim() || $('h1').first().text().trim() || 'N/A';
+            const company = $('span[itemprop="name"]').text().trim() || $('.company-name, .employer').first().text().trim() || 'N/A';
+            const location = $('span[itemprop="addressLocality"]').text().trim() || $('.location, .job-location').first().text().trim() || 'N/A';
+            const date_posted = $('meta[itemprop="datePosted"]').attr('content') || $('.date-posted, .job-date').first().text().trim() || null;
 
-            const descriptionContainer = $('div[itemprop="description"]');
+            const descriptionContainer = $('div[itemprop="description"]').length > 0 
+                ? $('div[itemprop="description"]') 
+                : $('.job-description, .description, .job-content').first();
             const description_html = descriptionContainer.html() || '';
             const description_text = htmlToText(description_html);
 
@@ -184,7 +225,7 @@ const crawler = new CheerioCrawler({
 
             await Dataset.pushData(item);
             jobsScraped++;
-            crawlerLog.info(`✓ Job ${jobsScraped}/${RESULTS_WANTED} saved: ${title}`);
+            crawlerLog.info(`✓ Job ${jobsScraped}/${MAX_JOBS} saved: ${title}`);
         }
     },
 
@@ -194,7 +235,10 @@ const crawler = new CheerioCrawler({
 });
 
 log.info('Starting scraper...');
-await crawler.run([startUrl]);
-log.info(`✓ Scraping completed. Total jobs scraped: ${jobsScraped}`);
+log.info(`Configuration: MAX_JOBS=${MAX_JOBS}, MAX_PAGES=${MAX_PAGES}, collectDetails=${collectDetails}`);
+log.info(`Start URL: ${finalStartUrl}`);
+
+await crawler.run([finalStartUrl]);
+log.info(`✓ Scraping completed. Total jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
 
 await Actor.exit();
