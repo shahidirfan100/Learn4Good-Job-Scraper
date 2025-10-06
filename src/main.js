@@ -29,25 +29,42 @@ const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) 
 
 // ------------------------- HELPERS -------------------------
 const buildStartUrl = (kw, loc, date) => {
-    const url = new URL('https://www.learn4good.com/jobs/search/');
-    url.pathname += `${encodeURIComponent(kw).replace(/%20/g, '-')}/`;
-    if (loc) {
-        url.pathname += `${encodeURIComponent(loc).replace(/%20/g, '-')}/`;
+    // Learn4Good URL pattern: https://www.learn4good.com/jobs/language/english/search/engineering/
+    const baseUrl = 'https://www.learn4good.com/jobs/language/english/search';
+    
+    let url = baseUrl;
+    
+    if (kw) {
+        // Clean and format keyword for URL
+        const cleanKeyword = kw.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+        url += `/${cleanKeyword}`;
     }
-
-    const params = new URLSearchParams();
+    
+    if (loc) {
+        // Add location if provided
+        const cleanLocation = loc.toLowerCase().replace(/[^a-z0-9\s]/g, '').replace(/\s+/g, '-');
+        url += `/${cleanLocation}`;
+    }
+    
+    url += '/'; // Always end with slash
+    
+    // Add query parameters for date filtering if needed
     if (date && date !== 'anytime') {
+        const params = new URLSearchParams();
         const dateMap = {
             '24h': '1',
-            '7d': '7',
+            '7d': '7', 
             '30d': '30',
         };
         if (dateMap[date]) {
-            params.set('date_posted', dateMap[date]);
+            params.set('days', dateMap[date]);
+        }
+        if (params.toString()) {
+            url += '?' + params.toString();
         }
     }
-    url.search = params.toString();
-    return url.href;
+    
+    return url;
 };
 
 const toAbs = (href) => {
@@ -80,35 +97,36 @@ let pagesVisited = 0;
 // ------------------------- CRAWLER -------------------------
 const crawler = new CheerioCrawler({
     proxyConfiguration: proxyConf,
-    maxRequestsPerMinute: 120,
-    requestHandlerTimeoutSecs: 45,
-    navigationTimeoutSecs: 60,
-    maxConcurrency: 10,
+    maxRequestsPerMinute: 60,  // Reduced to be more conservative
+    requestHandlerTimeoutSecs: 120,
+    navigationTimeoutSecs: 90,
+    maxConcurrency: 5,  // Reduced concurrency
     useSessionPool: true,
     persistCookiesPerSession: true,
     sessionPoolOptions: {
-        maxPoolSize: 50,
+        maxPoolSize: 20,
         sessionOptions: {
-            maxUsageCount: 50,
-            maxErrorScore: 3,
+            maxUsageCount: 30,
+            maxErrorScore: 5,
         },
     },
+    maxRequestRetries: 3,
 
     preNavigationHooks: [
         ({ request, session }) => {
             request.headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/108.0.0.0 Safari/537.36',
-                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7',
                 'Accept-Language': 'en-US,en;q=0.9',
-                'Cache-Control': 'max-age=0',
-                'Sec-CH-UA': '"Not?A_Brand";v="8", "Chromium";v="108", "Google Chrome";v="108"',
-                'Sec-CH-UA-Mobile': '?0',
-                'Sec-CH-UA-Platform': '"Windows"',
+                'Accept-Encoding': 'gzip, deflate, br',
+                'DNT': '1',
+                'Connection': 'keep-alive',
+                'Upgrade-Insecure-Requests': '1',
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
                 'Sec-Fetch-Site': 'none',
                 'Sec-Fetch-User': '?1',
-                'Upgrade-Insecure-Requests': '1',
+                'Cache-Control': 'max-age=0',
             };
             
             // Add custom cookies if provided
@@ -122,7 +140,16 @@ const crawler = new CheerioCrawler({
         const { label = 'LIST' } = request.userData;
 
         // Check for block page indicators
-        if ($('title').text().includes('Pardon Our Interruption') || $('body').text().includes('Verifying you are not a robot')) {
+        const title = $('title').text();
+        const bodyText = $('body').text();
+        
+        if (title.includes('Pardon Our Interruption') || 
+            title.includes('Just a moment') ||
+            bodyText.includes('Verifying you are not a robot') ||
+            bodyText.includes('Cloudflare') ||
+            bodyText.includes('Ray ID:')) {
+            
+            crawlerLog.warning(`Detected blocking page. Title: ${title.substring(0, 100)}`);
             session.retire(); // Retire the session that got blocked
             throw new Error(`Blocked on page ${request.url}, retiring session.`);
         }
@@ -131,18 +158,53 @@ const crawler = new CheerioCrawler({
             pagesVisited++;
             crawlerLog.info(`Processing LIST page ${pagesVisited}/${MAX_PAGES}: ${request.url}`);
             
+            // Debug: Log page title and basic info
+            const pageTitle = $('title').text();
+            const bodyText = $('body').text().substring(0, 200);
+            crawlerLog.info(`Page title: ${pageTitle}`);
+            crawlerLog.info(`Body preview: ${bodyText}...`);
+            
             const jobLinks = [];
-            $('a.job_link').each((_, el) => {
-                const href = $(el).attr('href');
-                if (href) {
-                    jobLinks.push(toAbs(href));
+            
+            // Look for job links - Learn4Good typically uses these patterns
+            const selectors = [
+                'a[href*="/jobs/"]',     // Jobs with /jobs/ in URL
+                'a[href*="/job/"]',      // Jobs with /job/ in URL  
+                '.job-title a',          // Job title links
+                'h3 a',                  // Header links (common pattern)
+                'h4 a',                  // Header links
+                'a.job_link',            // Original selector
+                'div[class*="job"] a'    // Any div with "job" in class
+            ];
+            
+            for (const selector of selectors) {
+                $(selector).each((_, el) => {
+                    const href = $(el).attr('href');
+                    if (href && (href.includes('/job') || href.includes('/position') || href.includes('/vacancy'))) {
+                        const fullUrl = toAbs(href);
+                        if (fullUrl && !jobLinks.includes(fullUrl)) {
+                            jobLinks.push(fullUrl);
+                        }
+                    }
+                });
+                
+                if (jobLinks.length > 0) {
+                    crawlerLog.info(`Found ${jobLinks.length} jobs using selector: ${selector}`);
+                    break; // Use the first selector that works
                 }
-            });
+            }
 
             crawlerLog.info(`LIST page: Found ${jobLinks.length} jobs on ${request.url}`);
 
             if (jobLinks.length === 0) {
                 crawlerLog.warning('No jobs found on this page. This might be the end of the results.');
+                // Debug: Log all links found on page
+                const allLinks = [];
+                $('a').each((_, el) => {
+                    const href = $(el).attr('href');
+                    if (href) allLinks.push(href);
+                });
+                crawlerLog.info(`All links on page (first 10): ${allLinks.slice(0, 10).join(', ')}`);
             }
 
             const remainingSlots = MAX_JOBS - jobsScraped;
@@ -156,10 +218,25 @@ const crawler = new CheerioCrawler({
             } else if (!collectDetails) {
                 // Save job data from listing page only
                 for (const jobLink of linksToEnqueue) {
-                    const jobElement = $(`a.job_link[href*="${jobLink.split('/').pop()}"]`).closest('.job-item, .job-listing, .job');
-                    const title = jobElement.find('h2, h3, .job-title').first().text().trim() || 'N/A';
-                    const company = jobElement.find('.company, .employer').first().text().trim() || 'N/A';
-                    const location = jobElement.find('.location, .job-location').first().text().trim() || 'N/A';
+                    // Try to find the job element containing this link
+                    let jobElement = $(`a[href="${jobLink}"]`).first();
+                    if (jobElement.length === 0) {
+                        // Try partial match
+                        const linkPart = jobLink.split('/').pop();
+                        jobElement = $(`a[href*="${linkPart}"]`).first();
+                    }
+                    
+                    // Get parent container
+                    const container = jobElement.closest('div, li, tr, article').length > 0 
+                        ? jobElement.closest('div, li, tr, article')
+                        : jobElement.parent();
+                    
+                    const title = container.find('h1, h2, h3, h4, .job-title, .title').first().text().trim() 
+                        || jobElement.text().trim() 
+                        || 'N/A';
+                        
+                    const company = container.find('.company, .employer, .org, .organization').first().text().trim() || 'N/A';
+                    const location = container.find('.location, .job-location, .city, .place').first().text().trim() || 'N/A';
                     
                     const item = {
                         title,
@@ -236,7 +313,8 @@ const crawler = new CheerioCrawler({
 
 log.info('Starting scraper...');
 log.info(`Configuration: MAX_JOBS=${MAX_JOBS}, MAX_PAGES=${MAX_PAGES}, collectDetails=${collectDetails}`);
-log.info(`Start URL: ${finalStartUrl}`);
+log.info(`Input - startUrl: ${startUrl || 'Not provided'}, keyword: ${keyword || 'Not provided'}, location: ${location || 'Not provided'}`);
+log.info(`Final Start URL: ${finalStartUrl}`);
 
 await crawler.run([finalStartUrl]);
 log.info(`✓ Scraping completed. Total jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
