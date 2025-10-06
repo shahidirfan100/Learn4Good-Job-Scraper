@@ -37,16 +37,13 @@ const buildStartUrl = (kw, loc, date) => {
     params.set('page_number', '1');
     
     if (kw) {
-        // Keywords go into 'what' parameter
         params.set('what', kw.trim());
     }
     
     if (loc) {
-        // Location goes into 'where' parameter
         params.set('where', loc.trim());
     }
     
-    // Add date filtering if needed
     if (date && date !== 'anytime') {
         const dateMap = {
             '24h': '1',
@@ -77,7 +74,7 @@ const htmlToText = (html) => {
         .replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '')
         .replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '')
         .replace(/<br\s*\/?>/gi, '\n')
-        .replace(/<\/(p|div|li|h\d|tr)>/gi, '\n')
+        .replace(/<\/(p|div|li|h\d|tr|td)>/gi, '\n')
         .replace(/<[^>]+>/g, '')
         .replace(/&nbsp;/gi, ' ')
         .replace(/&amp;/gi, '&')
@@ -100,6 +97,82 @@ const cleanText = (text) => {
         .trim() || 'N/A';
 };
 
+const cleanDescription = (html) => {
+    if (!html) return { html: '', text: '' };
+    
+    // Create a temporary container
+    const tempDiv = { innerHTML: html };
+    
+    // List of IDs and classes to remove (cookie banners, ads, navigation, etc.)
+    const removeSelectors = [
+        '#cookie_warning_container',
+        '#cookie_warning',
+        '.cookie_warning',
+        '.cookies_checkbox_update',
+        '.cookie_warning_controls',
+        '#privacy_policy',
+        '.advertisement',
+        '.ads',
+        '.banner',
+        'script',
+        'style',
+        'nav',
+        '.navigation',
+        '.menu',
+        'header',
+        'footer',
+        '.sidebar',
+        '.related-jobs',
+        '.similar-jobs',
+        'iframe',
+        '.social-share',
+        '.share-buttons'
+    ];
+    
+    // Remove unwanted elements using regex since we're working with string
+    let cleanedHtml = html;
+    
+    // Remove cookie warnings and related divs
+    cleanedHtml = cleanedHtml.replace(/<div[^>]*id=["']cookie[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+    cleanedHtml = cleanedHtml.replace(/<div[^>]*class=["'][^"']*cookie[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
+    
+    // Remove scripts and styles
+    cleanedHtml = cleanedHtml.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
+    cleanedHtml = cleanedHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
+    
+    // Remove navigation elements
+    cleanedHtml = cleanedHtml.replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '');
+    cleanedHtml = cleanedHtml.replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '');
+    cleanedHtml = cleanedHtml.replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '');
+    
+    // Remove elements with too many attributes (likely complex UI elements)
+    cleanedHtml = cleanedHtml.replace(/<div[^>]{200,}>[\s\S]*?<\/div>/gi, '');
+    
+    // Convert to text
+    const cleanedText = htmlToText(cleanedHtml);
+    
+    // Further clean text by removing cookie/privacy policy related lines
+    const lines = cleanedText.split('\n').filter(line => {
+        const lower = line.toLowerCase().trim();
+        return lower.length > 15 && 
+               !lower.includes('cookie') &&
+               !lower.includes('privacy policy') &&
+               !lower.includes('manage settings') &&
+               !lower.includes('accept & continue') &&
+               !lower.includes('opt-out') &&
+               !lower.includes('advertising cookies') &&
+               !lower.includes('functional cookies') &&
+               !lower.includes('strictly necessary') &&
+               !lower.includes('update settings') &&
+               !lower.match(/^(home|jobs|search|login|register|apply now|view|click|back to)$/i);
+    });
+    
+    return {
+        html: cleanedHtml,
+        text: lines.join('\n\n').trim()
+    };
+};
+
 // ------------------------- START URLS -------------------------
 const finalStartUrl = startUrl || buildStartUrl(keyword, location, posted_date);
 
@@ -111,29 +184,43 @@ const proxyConf = proxyConfiguration
 // ------------------------- SHARED STATE -------------------------
 let jobsScraped = 0;
 let pagesVisited = 0;
+const processedUrls = new Set();
 
 // ------------------------- CRAWLER -------------------------
 const crawler = new CheerioCrawler({
     proxyConfiguration: proxyConf,
-    maxRequestsPerMinute: 40,
-    requestHandlerTimeoutSecs: 120,
-    navigationTimeoutSecs: 90,
-    maxConcurrency: 3,
+    maxRequestsPerMinute: 30,
+    requestHandlerTimeoutSecs: 180,
+    navigationTimeoutSecs: 120,
+    maxConcurrency: 2,
     useSessionPool: true,
     persistCookiesPerSession: true,
     sessionPoolOptions: {
-        maxPoolSize: 15,
+        maxPoolSize: 10,
         sessionOptions: {
-            maxUsageCount: 40,
-            maxErrorScore: 3,
+            maxUsageCount: 50,
+            maxErrorScore: 2,
         },
     },
-    maxRequestRetries: 3,
+    maxRequestRetries: 5,
+    
+    // Add retry delay
+    retryOnBlocked: true,
 
     preNavigationHooks: [
-        ({ request }) => {
+        ({ request, session }) => {
+            // Rotate user agents
+            const userAgents = [
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:121.0) Gecko/20100101 Firefox/121.0',
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.1 Safari/605.1.15'
+            ];
+            
+            const randomUA = userAgents[Math.floor(Math.random() * userAgents.length)];
+            
             request.headers = {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+                'User-Agent': randomUA,
                 'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8',
                 'Accept-Language': 'en-US,en;q=0.9',
                 'Accept-Encoding': 'gzip, deflate, br',
@@ -142,13 +229,20 @@ const crawler = new CheerioCrawler({
                 'Upgrade-Insecure-Requests': '1',
                 'Sec-Fetch-Dest': 'document',
                 'Sec-Fetch-Mode': 'navigate',
-                'Sec-Fetch-Site': 'none',
+                'Sec-Fetch-Site': 'same-origin',
                 'Sec-Fetch-User': '?1',
                 'Cache-Control': 'max-age=0',
+                'Referer': 'https://www.learn4good.com/',
             };
             
             if (cookies) {
                 request.headers['Cookie'] = cookies;
+            }
+            
+            // Add small delay between requests
+            if (session) {
+                session.userData = session.userData || {};
+                session.userData.lastRequestTime = Date.now();
             }
         },
     ],
@@ -162,13 +256,16 @@ const crawler = new CheerioCrawler({
         
         if (title.includes('Pardon Our Interruption') || 
             title.includes('Just a moment') ||
+            title.includes('Access Denied') ||
             bodyText.includes('Verifying you are not a robot') ||
             bodyText.includes('Cloudflare') ||
             bodyText.includes('Ray ID:')) {
             
-            crawlerLog.warning(`Detected blocking page. Retiring session.`);
-            session.retire();
-            throw new Error(`Blocked on ${request.url}`);
+            crawlerLog.warning(`Detected blocking page on ${request.url}. Retiring session and retrying.`);
+            if (session) {
+                session.retire();
+            }
+            throw new Error(`Blocked - will retry with new session`);
         }
 
         if (label === 'LIST') {
@@ -178,37 +275,46 @@ const crawler = new CheerioCrawler({
             const jobLinks = [];
             
             // Learn4Good wraps each job in a specific structure
-            // Look for job links that match the pattern: /jobs/{location}/{country}/{category}/{id}/e/
             $('a').each((_, el) => {
                 const href = $(el).attr('href');
                 if (!href) return;
                 
-                // Match job detail URLs (they contain job ID and end with /e/ or /e)
+                // Match job detail URLs
                 if (href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?/)) {
                     const fullUrl = toAbs(href);
-                    if (fullUrl && !jobLinks.includes(fullUrl)) {
+                    if (fullUrl && !jobLinks.includes(fullUrl) && !processedUrls.has(fullUrl)) {
                         const linkText = cleanText($(el).text());
                         if (linkText !== 'N/A' && linkText.length > 3) {
                             jobLinks.push(fullUrl);
+                            processedUrls.add(fullUrl);
                         }
                     }
                 }
             });
 
-            crawlerLog.info(`Found ${jobLinks.length} job links on page ${pagesVisited}`);
+            crawlerLog.info(`Found ${jobLinks.length} new job links on page ${pagesVisited}`);
 
             if (jobLinks.length === 0) {
-                crawlerLog.warning('No jobs found. May have reached end of results.');
+                crawlerLog.warning('No jobs found. May have reached end of results or been blocked.');
+                // Don't stop immediately - try next page
             }
 
             const remainingSlots = MAX_JOBS - jobsScraped;
             const linksToEnqueue = jobLinks.slice(0, Math.max(0, remainingSlots));
 
             if (collectDetails && linksToEnqueue.length > 0) {
-                await enqueueLinks({
-                    urls: linksToEnqueue,
-                    userData: { label: 'DETAIL' },
-                });
+                // Enqueue with delay to avoid overwhelming the server
+                for (let i = 0; i < linksToEnqueue.length; i++) {
+                    await enqueueLinks({
+                        urls: [linksToEnqueue[i]],
+                        userData: { label: 'DETAIL' },
+                    });
+                    
+                    // Small delay between enqueueing
+                    if (i < linksToEnqueue.length - 1) {
+                        await new Promise(resolve => setTimeout(resolve, 100));
+                    }
+                }
                 crawlerLog.info(`Enqueued ${linksToEnqueue.length} detail pages`);
             } else if (!collectDetails) {
                 // Extract basic data from listing page
@@ -219,25 +325,21 @@ const crawler = new CheerioCrawler({
                     
                     const title = cleanText(linkElement.text());
                     
-                    // Try to find associated metadata near the link
                     const container = linkElement.closest('div, article, section, li');
                     const containerText = container.text();
                     
-                    // Extract company (usually follows "Listing for:")
                     let company = 'N/A';
                     const companyMatch = containerText.match(/Listing for:\s*([^\n]+)/);
                     if (companyMatch) {
                         company = cleanText(companyMatch[1]);
                     }
                     
-                    // Extract location (usually follows "Job in")
                     let location = 'N/A';
                     const locationMatch = containerText.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
                     if (locationMatch) {
                         location = cleanText(locationMatch[1]);
                     }
                     
-                    // Extract date if visible
                     let date_posted = null;
                     const dateMatch = containerText.match(/Listed on\s+(\d{4}-\d{2}-\d{2})/);
                     if (dateMatch) {
@@ -264,32 +366,14 @@ const crawler = new CheerioCrawler({
                 }
             }
 
-            // Pagination - Learn4Good uses page_number parameter
+            // Pagination - Continue as long as we haven't hit limits
             if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES) {
                 try {
                     const currentUrl = new URL(request.url);
                     const pageNum = parseInt(currentUrl.searchParams.get('page_number') || '1');
                     
-                    // Check if there's a next page link
-                    let hasNextPage = false;
-                    
-                    // Look for "Next" or ">" links
-                    $('a').each((_, el) => {
-                        const href = $(el).attr('href');
-                        const text = $(el).text().trim();
-                        
-                        if (href && (text.toLowerCase().includes('next') || text === '>' || text === '»')) {
-                            hasNextPage = true;
-                            return false; // break
-                        }
-                    });
-                    
-                    // Also check if we have enough jobs to warrant a next page
-                    if (jobLinks.length > 5) {
-                        hasNextPage = true;
-                    }
-                    
-                    if (hasNextPage && pageNum < 50) { // Safety limit
+                    // Always try next page if we're under limits
+                    if (pageNum < 100) { // Safety limit
                         currentUrl.searchParams.set('page_number', (pageNum + 1).toString());
                         const nextUrl = currentUrl.href;
                         
@@ -299,11 +383,15 @@ const crawler = new CheerioCrawler({
                         });
                         crawlerLog.info(`Enqueued next page (${pageNum + 1}): ${nextUrl}`);
                     } else {
-                        crawlerLog.info('No more pages to scrape.');
+                        crawlerLog.info('Reached page 100 safety limit.');
                     }
                 } catch (e) {
                     crawlerLog.warning(`Pagination error: ${e.message}`);
                 }
+            } else if (pagesVisited >= MAX_PAGES) {
+                crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping.`);
+            } else if (jobsScraped >= MAX_JOBS) {
+                crawlerLog.info(`Reached job limit (${jobsScraped}/${MAX_JOBS}). Stopping.`);
             }
         }
 
@@ -321,7 +409,7 @@ const crawler = new CheerioCrawler({
                 title = cleanText($('title').text().split('|')[0].split('-')[0]);
             }
 
-            // Extract company - Look for "Listing for:"
+            // Extract company
             let company = 'N/A';
             $('*').each((_, el) => {
                 const text = $(el).text();
@@ -329,12 +417,12 @@ const crawler = new CheerioCrawler({
                     const match = text.match(/Listing for:\s*([^\n]+)/);
                     if (match) {
                         company = cleanText(match[1]);
-                        return false; // break
+                        return false;
                     }
                 }
             });
 
-            // Extract location - Look for "Job in"
+            // Extract location
             let location = 'N/A';
             $('*').each((_, el) => {
                 const text = $(el).text();
@@ -342,12 +430,12 @@ const crawler = new CheerioCrawler({
                     const match = text.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
                     if (match) {
                         location = cleanText(match[1]);
-                        return false; // break
+                        return false;
                     }
                 }
             });
 
-            // Extract job type - Look for "Full Time", "Part Time", etc.
+            // Extract job type
             let job_type = undefined;
             const bodyText = $('body').text();
             const typeMatch = bodyText.match(/\b(Full[\s-]?[Tt]ime|Part[\s-]?[Tt]ime|Contract|Temporary|Permanent|Freelance|Internship|Remote)\b/);
@@ -355,7 +443,6 @@ const crawler = new CheerioCrawler({
                 job_type = cleanText(typeMatch[1]);
             }
 
-            // Extract employment type from structured text
             $('*').each((_, el) => {
                 const text = $(el).text();
                 if (text.includes('Employment type')) {
@@ -367,7 +454,7 @@ const crawler = new CheerioCrawler({
                 }
             });
 
-            // Extract date posted - Look for "Listed on"
+            // Extract date posted
             let date_posted = null;
             $('*').each((_, el) => {
                 const text = $(el).text();
@@ -380,60 +467,65 @@ const crawler = new CheerioCrawler({
                 }
             });
 
-            // Extract salary if present
+            // Extract salary
             let salary = undefined;
             const salaryMatch = bodyText.match(/\$[\d,]+(?:\s*-\s*\$[\d,]+)?(?:\s*(?:per|\/)\s*(?:hour|year|month|annum))?/i);
             if (salaryMatch) {
                 salary = cleanText(salaryMatch[0]);
             }
 
-            // Extract job description
+            // Extract job description - IMPROVED
             let description_html = '';
             let description_text = '';
 
-            // The main content is usually in the body, but we need to exclude navigation
-            // Find the longest text block that's not navigation
+            // Find main content by looking for job description keywords
             let bestContent = null;
-            let maxLength = 0;
+            let maxScore = 0;
 
             $('div, section, article').each((_, el) => {
                 const $el = $(el);
                 
-                // Skip if it has too many links (navigation)
+                // Skip cookie warnings and navigation
+                const elId = $el.attr('id') || '';
+                const elClass = $el.attr('class') || '';
+                
+                if (elId.includes('cookie') || elClass.includes('cookie') ||
+                    elId.includes('nav') || elClass.includes('nav') ||
+                    elId.includes('menu') || elClass.includes('menu')) {
+                    return;
+                }
+                
                 const linkCount = $el.find('a').length;
                 const textLength = $el.text().trim().length;
                 
-                if (linkCount < 10 && textLength > maxLength && textLength > 200) {
-                    // Check if it contains job-related keywords
+                if (linkCount < 10 && textLength > 200) {
                     const text = $el.text().toLowerCase();
-                    if (text.includes('responsibilities') || 
-                        text.includes('requirements') || 
-                        text.includes('qualifications') ||
-                        text.includes('description') ||
-                        text.includes('key ') ||
-                        text.includes('experience')) {
-                        maxLength = textLength;
+                    
+                    // Score based on job description keywords
+                    let score = 0;
+                    if (text.includes('responsibilities')) score += 3;
+                    if (text.includes('requirements')) score += 3;
+                    if (text.includes('qualifications')) score += 2;
+                    if (text.includes('description')) score += 2;
+                    if (text.includes('key ')) score += 1;
+                    if (text.includes('experience')) score += 1;
+                    if (text.includes('skills')) score += 1;
+                    
+                    // Bonus for longer text
+                    score += textLength / 1000;
+                    
+                    if (score > maxScore) {
+                        maxScore = score;
                         bestContent = $el;
                     }
                 }
             });
 
             if (bestContent) {
-                const cleaned = bestContent.clone();
-                // Remove navigation and ads
-                cleaned.find('script, style, nav, header, footer, .menu, .navigation, .ads, .advertisement').remove();
-                
-                description_html = cleaned.html() || '';
-                description_text = htmlToText(description_html);
-                
-                // Further clean the description text
-                const lines = description_text.split('\n').filter(line => {
-                    const trimmed = line.trim();
-                    // Remove very short lines and navigation-like text
-                    return trimmed.length > 20 && 
-                           !trimmed.match(/^(Home|Jobs|Search|Login|Register|Apply|View|Click|Back)$/i);
-                });
-                description_text = lines.join('\n\n').trim();
+                const rawHtml = bestContent.html() || '';
+                const cleaned = cleanDescription(rawHtml);
+                description_html = cleaned.html;
+                description_text = cleaned.text;
             }
 
             const item = {
@@ -455,7 +547,7 @@ const crawler = new CheerioCrawler({
     },
 
     failedRequestHandler: async ({ request }, error) => {
-        log.error(`Request ${request.url} failed: ${error.message}`);
+        log.error(`Request ${request.url} failed after retries: ${error.message}`);
     },
 });
 
