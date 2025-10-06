@@ -104,24 +104,45 @@ const cleanDescription = (html) => {
 
     const $ = cheerio.load(html);
 
-    // Remove UI / non-content elements
+    // Remove specific Learn4Good navigation and metadata elements
     const removeSelectors = [
         'script', 'style', 'nav', 'header', 'footer', 'form', 'iframe',
         'noscript', 'svg', 'canvas', 'button', 'input', 'select', 'option', 'label',
+        // Learn4Good specific elements
+        '#top_section', '#mob_ad_container', '.path', '.no_heading_path',
+        '#info_div', '.ll', '#by_line', '.bottom_main_info',
+        '[id*="ad"]', '[class*="ad"]', '[class*="banner"]',
+        // Generic cleanup
         '.cookie', '#cookie', '[id*="cookie"]', '[class*="cookie"]',
         '.ads', '.advertisement', '.banner', '.social', '.share', '.share-buttons',
         '.search', '.filter', '.job-search', '.cv-search', '.navigation', '.menu',
-        '.sidebar', '.related-jobs', '.similar-jobs'
+        '.sidebar', '.related-jobs', '.similar-jobs', '.breadcrumb',
+        // Metadata elements
+        'meta', '[itemprop]', '[itemscope]', '[itemtype]'
     ];
     $(removeSelectors.join(',')).remove();
 
-    // Remove superfluous tiny leaves
-    $('div, section, aside, article, span, li, p').each((_, el) => {
-        const txt = $(el).text().trim();
-        if (txt.length < 40 && $(el).children().length === 0) $(el).remove();
+    // Remove elements with too many links (navigation)
+    $('div, section, article').each((_, el) => {
+        const $el = $(el);
+        const linkCount = $el.find('a').length;
+        const textLength = $el.text().trim().length;
+        
+        // If more than 50% links, it's probably navigation
+        if (linkCount > 5 && linkCount > textLength / 20) {
+            $el.remove();
+        }
     });
 
-    // Flatten redundant wrappers with too many attributes / widgets
+    // Remove superfluous tiny elements
+    $('div, section, aside, article, span, li, p').each((_, el) => {
+        const txt = $(el).text().trim();
+        if (txt.length < 40 && $(el).children().length === 0) {
+            $(el).remove();
+        }
+    });
+
+    // Remove wrappers with too many attributes (widgets)
     $('div, section, article').each((_, el) => {
         const attrCount = Object.keys(el.attribs || {}).length;
         if (attrCount > 10 && $(el).find('input,select,button,form').length > 0) {
@@ -340,23 +361,65 @@ const crawler = new CheerioCrawler({
 
             // Pagination - Continue as long as we haven't hit limits
             if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES) {
+                let nextUrl = null;
+                
                 try {
-                    const currentUrl = new URL(request.url);
-                    const pageNum = parseInt(currentUrl.searchParams.get('page_number') || '1');
+                    // Method 1: Look for actual "Next" links on the page
+                    const nextSelectors = [
+                        'a:contains("Next")', 'a:contains("next")', 'a:contains(">")',
+                        'a[title*="Next"]', 'a[title*="next"]', '.next a',
+                        '.pagination a:last', 'a[href*="page"]'
+                    ];
                     
-                    // Always try next page if we're under limits
-                    if (pageNum < 100) { // Safety limit
-                        currentUrl.searchParams.set('page_number', (pageNum + 1).toString());
-                        const nextUrl = currentUrl.href;
+                    for (const selector of nextSelectors) {
+                        const link = $(selector).attr('href');
+                        if (link && !link.includes('javascript')) {
+                            nextUrl = toAbs(link);
+                            crawlerLog.info(`Found next page with selector: ${selector} -> ${nextUrl}`);
+                            break;
+                        }
+                    }
+                    
+                    // Method 2: Try different parameter patterns if no next link found
+                    if (!nextUrl) {
+                        const currentUrl = new URL(request.url);
                         
+                        // Try different pagination parameter patterns
+                        const patterns = [
+                            'page_number', 'page', 'p', 'start', 'offset'
+                        ];
+                        
+                        for (const param of patterns) {
+                            const currentPage = parseInt(currentUrl.searchParams.get(param) || '1');
+                            if (currentPage < 50) { // Safety limit
+                                const testUrl = new URL(currentUrl);
+                                testUrl.searchParams.set(param, (currentPage + 1).toString());
+                                nextUrl = testUrl.href;
+                                crawlerLog.info(`Constructed next page using ${param}: ${nextUrl}`);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Method 3: If still no URL and it's the first few pages, try appending page number
+                    if (!nextUrl && pagesVisited <= 5) {
+                        const baseUrl = request.url.split('?')[0];
+                        if (!baseUrl.includes('page')) {
+                            nextUrl = `${baseUrl}?page=${pagesVisited + 1}`;
+                            crawlerLog.info(`Constructed simple page URL: ${nextUrl}`);
+                        }
+                    }
+                    
+                    if (nextUrl) {
                         await enqueueLinks({
                             urls: [nextUrl],
                             userData: { label: 'LIST' },
                         });
-                        crawlerLog.info(`Enqueued next page (${pageNum + 1}): ${nextUrl}`);
+                        crawlerLog.info(`Enqueued next page (${pagesVisited + 1}): ${nextUrl}`);
                     } else {
-                        crawlerLog.info('Reached page 100 safety limit.');
+                        crawlerLog.info('No more pages to try - ending pagination');
                     }
+                    
                 } catch (e) {
                     crawlerLog.warning(`Pagination error: ${e.message}`);
                 }
@@ -450,54 +513,76 @@ const crawler = new CheerioCrawler({
             let description_html = '';
             let description_text = '';
 
-            // Find main content by looking for job description keywords
-            let bestContent = null;
-            let maxScore = 0;
+            // Try structured data first (Learn4Good uses itemprop="description")
+            let descriptionElement = $('div[itemprop="description"]');
+            
+            if (descriptionElement.length === 0) {
+                // Find main content by looking for job description keywords
+                let bestContent = null;
+                let maxScore = 0;
 
-            $('div, section, article').each((_, el) => {
-                const $el = $(el);
-                
-                // Skip cookie warnings and navigation
-                const elId = $el.attr('id') || '';
-                const elClass = $el.attr('class') || '';
-                
-                if (elId.includes('cookie') || elClass.includes('cookie') ||
-                    elId.includes('nav') || elClass.includes('nav') ||
-                    elId.includes('menu') || elClass.includes('menu')) {
-                    return;
-                }
-                
-                const linkCount = $el.find('a').length;
-                const textLength = $el.text().trim().length;
-                
-                if (linkCount < 10 && textLength > 200) {
+                $('div, section, article').each((_, el) => {
+                    const $el = $(el);
+                    const elId = $el.attr('id') || '';
+                    const elClass = $el.attr('class') || '';
+                    
+                    // Skip navigation, header, and metadata elements
+                    if (elId.includes('top_section') || elId.includes('info_div') || 
+                        elId.includes('mob_ad') || elClass.includes('path') ||
+                        elId.includes('cookie') || elClass.includes('cookie') ||
+                        elId.includes('nav') || elClass.includes('nav') ||
+                        elId.includes('menu') || elClass.includes('menu') ||
+                        elClass.includes('ll') || elClass.includes('by_line')) {
+                        return;
+                    }
+                    
+                    const linkCount = $el.find('a').length;
+                    const textLength = $el.text().trim().length;
+                    const linkDensity = linkCount / Math.max(textLength / 100, 1);
+                    
+                    // Skip if too many links (navigation) or too short
+                    if (linkDensity > 5 || textLength < 200) {
+                        return;
+                    }
+                    
                     const text = $el.text().toLowerCase();
                     
                     // Score based on job description keywords
                     let score = 0;
-                    if (text.includes('responsibilities')) score += 3;
-                    if (text.includes('requirements')) score += 3;
-                    if (text.includes('qualifications')) score += 2;
-                    if (text.includes('description')) score += 2;
-                    if (text.includes('key ')) score += 1;
-                    if (text.includes('experience')) score += 1;
-                    if (text.includes('skills')) score += 1;
+                    if (text.includes('responsibilities')) score += 5;
+                    if (text.includes('requirements')) score += 5;
+                    if (text.includes('qualifications')) score += 4;
+                    if (text.includes('job description')) score += 4;
+                    if (text.includes('role description')) score += 4;
+                    if (text.includes('what you')) score += 3;
+                    if (text.includes('experience')) score += 2;
+                    if (text.includes('skills')) score += 2;
+                    if (text.includes('education')) score += 1;
                     
                     // Bonus for longer text
-                    score += textLength / 1000;
+                    score += Math.min(textLength / 1000, 3);
                     
-                    if (score > maxScore) {
+                    // Penalty for too many links
+                    score -= linkDensity;
+                    
+                    if (score > maxScore && score > 2) {
                         maxScore = score;
                         bestContent = $el;
                     }
-                }
-            });
+                });
+                
+                descriptionElement = bestContent;
+            }
 
-            if (bestContent) {
-                const rawHtml = bestContent.html() || '';
+            if (descriptionElement && descriptionElement.length > 0) {
+                const rawHtml = descriptionElement.html() || '';
                 const cleaned = cleanDescription(rawHtml);
                 description_html = cleaned.html;
                 description_text = cleaned.text;
+                
+                crawlerLog.info(`Description extracted from element with score: ${description_text.length} chars`);
+            } else {
+                crawlerLog.warning('No suitable description element found');
             }
 
             const item = {
