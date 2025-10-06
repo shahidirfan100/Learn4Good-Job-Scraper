@@ -197,59 +197,57 @@ const crawler = new CheerioCrawler({
                 'post-jobs', 'apply-for-jobs', 'job-search-engine'
             ];
             
-            // First, try to find job links in structured data (tables, lists)
-            $('table tr, ul li, ol li').each((_, row) => {
-                const $row = $(row);
-                const rowText = $row.text().toLowerCase();
+            // Cast a wider net to find more job links
+            // Method 1: Look for links that go to job detail pages
+            $('a').each((_, el) => {
+                const href = $(el).attr('href');
+                const linkText = cleanText($(el).text());
                 
-                // Check if this row contains job-like information
-                if (rowText.includes('salary') || rowText.includes('location') || 
-                    rowText.includes('company') || rowText.includes('apply') ||
-                    (rowText.includes('job') && (rowText.includes('title') || rowText.includes('position')))) {
+                if (href && linkText !== 'N/A' && linkText.length > 3) {
+                    const fullUrl = toAbs(href);
+                    const isExcluded = excludePatterns.some(pattern => href.toLowerCase().includes(pattern));
                     
-                    $row.find('a').each((_, el) => {
-                        const href = $(el).attr('href');
-                        const linkText = cleanText($(el).text());
-                        
-                        if (href && linkText !== 'N/A' && linkText.length > 5) {
-                            const fullUrl = toAbs(href);
-                            const isExcluded = excludePatterns.some(pattern => href.toLowerCase().includes(pattern));
-                            
-                            if (!isExcluded && fullUrl && !jobLinks.includes(fullUrl)) {
-                                // Additional validation - check if link text looks like a job title
-                                const hasJobKeywords = /\b(manager|engineer|developer|analyst|specialist|coordinator|assistant|director|officer|consultant|technician|supervisor|representative|associate|administrator)\b/i.test(linkText);
-                                const isNotNavigation = !/(register|login|search|faq|post|apply now|click here|more info)/i.test(linkText);
-                                
-                                if (hasJobKeywords || (linkText.length > 15 && isNotNavigation)) {
-                                    jobLinks.push(fullUrl);
-                                    crawlerLog.info(`Found job: "${linkText}" -> ${href}`);
-                                }
-                            }
+                    // Check if URL pattern suggests a job posting
+                    const isJobUrl = href.includes('/job') || href.includes('/position') || href.includes('/vacancy') ||
+                                    href.match(/\/\d+/) || // URLs with numbers (often job IDs)
+                                    href.includes('apply');
+                    
+                    // Check if link text suggests a job
+                    const hasJobWords = /\b(job|position|vacancy|role|career|opportunity|hire|recruit|work|employment)\b/i.test(linkText);
+                    const hasJobTitles = /\b(manager|engineer|developer|analyst|specialist|coordinator|assistant|director|officer|consultant|technician|supervisor|representative|associate|administrator|teacher|nurse|accountant|sales|marketing|designer|writer|chef|driver|mechanic|electrician|plumber|cashier|receptionist|clerk|intern)\b/i.test(linkText);
+                    
+                    // Exclude obvious navigation
+                    const isNotNavigation = !/(register|login|search|faq|post|apply now|click here|more info|home|about|contact|privacy|terms|help|support)/i.test(linkText);
+                    const isNotCountryList = !/(albania|algeria|andorra|angola|argentina|australia|austria|bahrain|bangladesh|belgium|brazil|canada|china|denmark|egypt|france|germany|india|italy|japan|korea|malaysia|mexico|netherlands|norway|pakistan|poland|portugal|russia|singapore|spain|sweden|switzerland|thailand|ukraine|vietnam)/i.test(linkText);
+                    
+                    if (!isExcluded && fullUrl && !jobLinks.includes(fullUrl) && isNotNavigation && isNotCountryList) {
+                        // If it's clearly a job URL or has job-related text, include it
+                        if (isJobUrl || hasJobWords || hasJobTitles || 
+                            (linkText.length > 15 && linkText.length < 200)) { // Reasonable length for job titles
+                            jobLinks.push(fullUrl);
+                            crawlerLog.info(`Found job: "${linkText.length > 60 ? linkText.substring(0, 60) + '...' : linkText}" -> ${href}`);
                         }
-                    });
+                    }
                 }
             });
             
-            // If no structured jobs found, look for any reasonable job links
-            if (jobLinks.length === 0) {
-                crawlerLog.info('No structured jobs found, trying general search...');
-                
-                $('a').each((_, el) => {
+            // Method 2: Look specifically in job listing containers
+            $('table, .jobs, .listings, .results, .job-list, .job-results').each((_, container) => {
+                $(container).find('a').each((_, el) => {
                     const href = $(el).attr('href');
                     const linkText = cleanText($(el).text());
                     
-                    if (href && linkText !== 'N/A' && linkText.length > 20) { // Longer text more likely to be job title
+                    if (href && linkText !== 'N/A' && linkText.length > 5) {
                         const fullUrl = toAbs(href);
                         const isExcluded = excludePatterns.some(pattern => href.toLowerCase().includes(pattern));
-                        const isNotCountryList = !/(albania|algeria|andorra|angola|argentina|australia|austria|bahrain|bangladesh|belgium|brazil|canada|china|denmark|egypt|france|germany|india|italy|japan|korea|malaysia|mexico|netherlands|norway|pakistan|poland|portugal|russia|singapore|spain|sweden|switzerland|thailand|ukraine|vietnam)/i.test(linkText);
                         
-                        if (!isExcluded && isNotCountryList && fullUrl && !jobLinks.includes(fullUrl)) {
+                        if (!isExcluded && fullUrl && !jobLinks.includes(fullUrl)) {
                             jobLinks.push(fullUrl);
-                            crawlerLog.info(`Found potential job: "${linkText.substring(0, 50)}..." -> ${href}`);
+                            crawlerLog.info(`Found job in container: "${linkText.substring(0, 50)}..." -> ${href}`);
                         }
                     }
                 });
-            }
+            });
 
             crawlerLog.info(`LIST page: Found ${jobLinks.length} jobs on ${request.url}`);
 
@@ -299,6 +297,8 @@ const crawler = new CheerioCrawler({
                     let company = 'N/A';
                     let location = 'N/A';
                     let salary = 'N/A';
+                    let job_type = 'N/A';
+                    let date_posted = null;
                     
                     // For table rows (most common Learn4Good pattern)
                     if (container.is('tr')) {
@@ -313,17 +313,18 @@ const crawler = new CheerioCrawler({
                         
                         // Extract data based on typical Learn4Good table structure
                         if (cells.length >= 2) {
-                            // Usually: Title | Company/Details | Location/Salary
+                            // Usually: Title | Company/Details | Location/Salary | Date/Type
                             for (let i = 1; i < cells.length; i++) {
                                 const cellText = cleanText($(cells[i]).text());
                                 
                                 // Check if this cell contains company info
                                 if (company === 'N/A' && cellText.length > 2 && 
-                                    !cellText.match(/^\$|\d+k|\d+,\d+|per hour|hourly|annual/i)) {
+                                    !cellText.match(/^\$|\d+k|\d+,\d+|per hour|hourly|annual|full.?time|part.?time|contract|temporary/i) &&
+                                    !cellText.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w+\s+\d{1,2},?\s+\d{4}/)) {
                                     company = cellText;
                                 }
                                 
-                                // Check if this cell contains location info
+                                // Check if this cell contains location info (city, state patterns)
                                 if (location === 'N/A' && cellText.match(/\b[A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z]{2,})?/)) {
                                     location = cellText;
                                 }
@@ -331,6 +332,16 @@ const crawler = new CheerioCrawler({
                                 // Check if this cell contains salary info
                                 if (salary === 'N/A' && cellText.match(/\$|\d+k|\d+,\d+|per hour|hourly|annual/i)) {
                                     salary = cellText;
+                                }
+                                
+                                // Check if this cell contains job type
+                                if (job_type === 'N/A' && cellText.match(/\b(full.?time|part.?time|contract|temporary|permanent|freelance|internship|remote|on.?site|hybrid)\b/i)) {
+                                    job_type = cellText;
+                                }
+                                
+                                // Check if this cell contains date posted
+                                if (!date_posted && cellText.match(/\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\w+\s+\d{1,2},?\s+\d{4}/)) {
+                                    date_posted = cellText;
                                 }
                             }
                         }
@@ -356,7 +367,8 @@ const crawler = new CheerioCrawler({
                         company: company,
                         location: location,
                         salary: salary !== 'N/A' ? salary : undefined,
-                        date_posted: null,
+                        job_type: job_type !== 'N/A' ? job_type : undefined,
+                        date_posted: date_posted,
                         description_html: '',
                         description_text: '',
                         url: jobLink,
@@ -370,20 +382,64 @@ const crawler = new CheerioCrawler({
                 }
             }
 
-            // Pagination
+            // Pagination - try multiple selectors for "Next" links
             if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES) {
-                const nextPageLink = $('a:contains("Next")').attr('href');
+                let nextPageLink = null;
+                
+                // Try different selectors for pagination
+                const nextSelectors = [
+                    'a:contains("Next")',
+                    'a:contains("next")', 
+                    'a:contains(">")',
+                    'a[title*="Next"]',
+                    'a[title*="next"]',
+                    '.next a',
+                    '.pagination a:last-child',
+                    'a[href*="page"]',
+                    'a[href*="start="]'
+                ];
+                
+                for (const selector of nextSelectors) {
+                    const link = $(selector).attr('href');
+                    if (link && !link.includes('javascript')) {
+                        nextPageLink = link;
+                        crawlerLog.info(`Found next page with selector: ${selector}`);
+                        break;
+                    }
+                }
+                
                 if (nextPageLink) {
+                    const fullNextUrl = toAbs(nextPageLink);
                     await enqueueLinks({
-                        urls: [toAbs(nextPageLink)],
+                        urls: [fullNextUrl],
                         userData: { label: 'LIST' },
                     });
-                    crawlerLog.info('Enqueued next page.');
+                    crawlerLog.info(`Enqueued next page: ${fullNextUrl}`);
                 } else {
-                    crawlerLog.info('No next page link found. Ending pagination.');
+                    crawlerLog.info('No next page link found. Trying to construct next page...');
+                    
+                    // If no next link found, try to construct one
+                    const currentUrl = new URL(request.url);
+                    const pageParam = currentUrl.searchParams.get('page') || currentUrl.searchParams.get('start') || '0';
+                    const nextPage = parseInt(pageParam) + 1;
+                    
+                    if (nextPage <= 10) { // Try up to 10 pages
+                        currentUrl.searchParams.set('page', nextPage.toString());
+                        const constructedUrl = currentUrl.href;
+                        
+                        await enqueueLinks({
+                            urls: [constructedUrl],
+                            userData: { label: 'LIST' },
+                        });
+                        crawlerLog.info(`Constructed next page: ${constructedUrl}`);
+                    } else {
+                        crawlerLog.info('Ending pagination - no more pages to try.');
+                    }
                 }
             } else if (pagesVisited >= MAX_PAGES) {
                 crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping pagination.`);
+            } else {
+                crawlerLog.info(`Reached job limit (${jobsScraped}/${MAX_JOBS}). Stopping pagination.`);
             }
         }
 
@@ -412,28 +468,46 @@ const crawler = new CheerioCrawler({
                 $('td:contains("Company:"), td:contains("Employer:")').next().text()
             );
 
-            // Extract location with better cleaning
+            // Extract location with multiple strategies
             let location = cleanText(
                 $('span[itemprop="addressLocality"]').text() || 
-                $('.location, .job-location, .city').first().text() ||
+                $('.location, .job-location, .city, .address').first().text() ||
                 $('strong:contains("Location"), b:contains("Location")').parent().text().replace(/Location:?\s*/i, '') ||
-                $('td:contains("Location:"), td:contains("City:")').next().text()
+                $('td:contains("Location:"), td:contains("City:"), td:contains("Address:")').next().text() ||
+                // Look in the job description for location patterns
+                ($('body').text().match(/Location:?\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*(?:,\s*[A-Z]{2,})?)/i) || [])[1] ||
+                // Look for city, state patterns
+                ($('body').text().match(/\b([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*,\s*[A-Z]{2,})\b/g) || [])[0]
             );
 
             // Extract salary if available
             let salary = cleanText(
-                $('.salary, .pay, .wage').first().text() ||
-                $('strong:contains("Salary"), b:contains("Salary")').parent().text().replace(/Salary:?\s*/i, '') ||
-                $('td:contains("Salary:"), td:contains("Pay:")').next().text()
+                $('.salary, .pay, .wage, .compensation').first().text() ||
+                $('strong:contains("Salary"), b:contains("Salary"), strong:contains("Pay"), b:contains("Pay")').parent().text().replace(/(Salary|Pay):?\s*/i, '') ||
+                $('td:contains("Salary:"), td:contains("Pay:"), td:contains("Wage:")').next().text() ||
+                // Look for salary patterns in text
+                ($('body').text().match(/(?:Salary|Pay|Wage|Compensation):?\s*[\$£€]?[\d,]+(?:\s*-\s*[\$£€]?[\d,]+)?(?:\s*per\s*(?:hour|year|month))?/i) || [])[0]
             );
             if (salary === 'N/A') salary = undefined;
 
-            // Extract posted date
+            // Extract job type (full-time, part-time, contract, etc.)
+            let job_type = cleanText(
+                $('.job-type, .employment-type, .type').first().text() ||
+                $('strong:contains("Type"), b:contains("Type"), strong:contains("Employment"), b:contains("Employment")').parent().text().replace(/(Type|Employment):?\s*/i, '') ||
+                $('td:contains("Type:"), td:contains("Employment:")').next().text() ||
+                // Look for job type patterns in text
+                ($('body').text().match(/\b(Full[\s-]?time|Part[\s-]?time|Contract|Temporary|Permanent|Freelance|Internship|Remote|On-site|Hybrid)\b/i) || [])[0]
+            );
+            if (job_type === 'N/A') job_type = undefined;
+
+            // Extract posted date with better patterns
             let date_posted = cleanText(
                 $('meta[itemprop="datePosted"]').attr('content') || 
-                $('.date-posted, .job-date, .posted').first().text() ||
-                $('strong:contains("Posted"), b:contains("Posted")').parent().text().replace(/Posted:?\s*/i, '') ||
-                $('td:contains("Posted:"), td:contains("Date:")').next().text()
+                $('.date-posted, .job-date, .posted, .date').first().text() ||
+                $('strong:contains("Posted"), b:contains("Posted"), strong:contains("Date"), b:contains("Date")').parent().text().replace(/(Posted|Date):?\s*/i, '') ||
+                $('td:contains("Posted:"), td:contains("Date:")').next().text() ||
+                // Look for date patterns in text
+                ($('body').text().match(/(?:Posted|Date):?\s*(\d{1,2}[\/\-]\d{1,2}[\/\-]\d{2,4}|\d{1,2}\s+\w+\s+\d{4}|\w+\s+\d{1,2},?\s+\d{4})/i) || [])[1]
             );
             if (date_posted === 'N/A') date_posted = null;
 
@@ -490,6 +564,7 @@ const crawler = new CheerioCrawler({
                 company,
                 location,
                 salary,
+                job_type,
                 date_posted,
                 description_html,
                 description_text,
