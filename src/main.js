@@ -166,32 +166,84 @@ const crawler = new CheerioCrawler({
             
             const jobLinks = [];
             
-            // Look for job links - Learn4Good typically uses these patterns
-            const selectors = [
-                'a[href*="/jobs/"]',     // Jobs with /jobs/ in URL
-                'a[href*="/job/"]',      // Jobs with /job/ in URL  
-                '.job-title a',          // Job title links
-                'h3 a',                  // Header links (common pattern)
-                'h4 a',                  // Header links
-                'a.job_link',            // Original selector
-                'div[class*="job"] a'    // Any div with "job" in class
+            // Look for actual job posting links - Learn4Good specific patterns
+            // Exclude common non-job URLs
+            const excludePatterns = [
+                '/register',
+                '/registration',
+                '/login',
+                '/site-login',
+                '/enter.htm',
+                '/faqs',
+                '/employer',
+                '/search/advanced',
+                '/language/english/registration',
+                'jobseeker_faqs',
+                'employer_faqs'
             ];
             
-            for (const selector of selectors) {
-                $(selector).each((_, el) => {
-                    const href = $(el).attr('href');
-                    if (href && (href.includes('/job') || href.includes('/position') || href.includes('/vacancy'))) {
-                        const fullUrl = toAbs(href);
-                        if (fullUrl && !jobLinks.includes(fullUrl)) {
-                            jobLinks.push(fullUrl);
-                        }
+            // Look for job links with more specific criteria
+            $('a').each((_, el) => {
+                const href = $(el).attr('href');
+                const linkText = $(el).text().trim().toLowerCase();
+                
+                if (href) {
+                    const fullUrl = toAbs(href);
+                    
+                    // Check if this looks like a job posting URL
+                    const isJobUrl = (
+                        // Contains job-related paths but not excluded ones
+                        (href.includes('/jobs/') && !excludePatterns.some(pattern => href.includes(pattern))) ||
+                        // Specific job posting patterns
+                        href.match(/\/jobs\/.*\/\d+/) ||  // URLs with job IDs
+                        href.match(/\/job\/\d+/) ||       // Direct job ID URLs
+                        href.includes('/vacancy/') ||
+                        href.includes('/position/')
+                    );
+                    
+                    // Additional text-based filtering
+                    const isJobText = (
+                        linkText.length > 10 && // Avoid short navigation links
+                        !linkText.includes('register') &&
+                        !linkText.includes('login') &&
+                        !linkText.includes('post jobs') &&
+                        !linkText.includes('search') &&
+                        !linkText.includes('faq') &&
+                        !linkText.includes('apply for jobs online') &&
+                        !linkText.includes('job search engine')
+                    );
+                    
+                    if (isJobUrl && isJobText && fullUrl && !jobLinks.includes(fullUrl)) {
+                        jobLinks.push(fullUrl);
+                        crawlerLog.info(`Found potential job: "${linkText.substring(0, 60)}..." -> ${href}`);
                     }
+                }
+            });
+            
+            // If no job links found with strict criteria, try broader search for job listings table/list
+            if (jobLinks.length === 0) {
+                crawlerLog.info('No jobs found with strict criteria, trying broader search...');
+                
+                // Look for job listing containers
+                const jobContainers = $('table tr, .job-listing, .listing, div[class*="job"]').filter((_, el) => {
+                    const text = $(el).text().toLowerCase();
+                    return text.includes('salary') || text.includes('location') || text.includes('company') || 
+                           text.includes('posted') || text.includes('apply');
                 });
                 
-                if (jobLinks.length > 0) {
-                    crawlerLog.info(`Found ${jobLinks.length} jobs using selector: ${selector}`);
-                    break; // Use the first selector that works
-                }
+                jobContainers.each((_, container) => {
+                    $(container).find('a').each((_, el) => {
+                        const href = $(el).attr('href');
+                        const linkText = $(el).text().trim();
+                        
+                        if (href && linkText.length > 5 && !excludePatterns.some(pattern => href.includes(pattern))) {
+                            const fullUrl = toAbs(href);
+                            if (fullUrl && !jobLinks.includes(fullUrl)) {
+                                jobLinks.push(fullUrl);
+                            }
+                        }
+                    });
+                });
             }
 
             crawlerLog.info(`LIST page: Found ${jobLinks.length} jobs on ${request.url}`);
@@ -218,7 +270,7 @@ const crawler = new CheerioCrawler({
             } else if (!collectDetails) {
                 // Save job data from listing page only
                 for (const jobLink of linksToEnqueue) {
-                    // Try to find the job element containing this link
+                    // Find the job element containing this link
                     let jobElement = $(`a[href="${jobLink}"]`).first();
                     if (jobElement.length === 0) {
                         // Try partial match
@@ -226,20 +278,60 @@ const crawler = new CheerioCrawler({
                         jobElement = $(`a[href*="${linkPart}"]`).first();
                     }
                     
-                    // Get parent container
-                    const container = jobElement.closest('div, li, tr, article').length > 0 
-                        ? jobElement.closest('div, li, tr, article')
-                        : jobElement.parent();
+                    if (jobElement.length === 0) {
+                        crawlerLog.warning(`Could not find element for job link: ${jobLink}`);
+                        continue;
+                    }
                     
-                    const title = container.find('h1, h2, h3, h4, .job-title, .title').first().text().trim() 
-                        || jobElement.text().trim() 
-                        || 'N/A';
-                        
-                    const company = container.find('.company, .employer, .org, .organization').first().text().trim() || 'N/A';
-                    const location = container.find('.location, .job-location, .city, .place').first().text().trim() || 'N/A';
+                    // Get the job title from the link text itself
+                    let title = jobElement.text().trim();
+                    
+                    // Try to find more context from parent elements
+                    let container = jobElement.closest('tr, div, li, article');
+                    if (container.length === 0) {
+                        container = jobElement.parent();
+                    }
+                    
+                    // Try to extract better title if current one is too short
+                    if (title.length < 5) {
+                        const betterTitle = container.find('h1, h2, h3, h4, .job-title, .title, strong, b').first().text().trim();
+                        if (betterTitle.length > title.length) {
+                            title = betterTitle;
+                        }
+                    }
+                    
+                    // Extract company and location from the same row/container
+                    let company = 'N/A';
+                    let location = 'N/A';
+                    
+                    // Look for company in the container
+                    const companyElement = container.find('.company, .employer, .org, .organization, td:contains("Company"), td:contains("Employer")').first();
+                    if (companyElement.length > 0) {
+                        company = companyElement.text().trim();
+                    }
+                    
+                    // Look for location in the container
+                    const locationElement = container.find('.location, .job-location, .city, .place, td:contains("Location"), td:contains("City")').first();
+                    if (locationElement.length > 0) {
+                        location = locationElement.text().trim();
+                    }
+                    
+                    // If still N/A, try to extract from table cells (common Learn4Good pattern)
+                    if (container.is('tr')) {
+                        const cells = container.find('td');
+                        if (cells.length >= 3) {
+                            // Typically: Job Title | Company | Location
+                            if (company === 'N/A' && cells.eq(1).text().trim()) {
+                                company = cells.eq(1).text().trim();
+                            }
+                            if (location === 'N/A' && cells.eq(2).text().trim()) {
+                                location = cells.eq(2).text().trim();
+                            }
+                        }
+                    }
                     
                     const item = {
-                        title,
+                        title: title || 'N/A',
                         company,
                         location,
                         date_posted: null,
@@ -279,14 +371,52 @@ const crawler = new CheerioCrawler({
                 return;
             }
 
-            const title = $('h1[itemprop="title"]').text().trim() || $('h1').first().text().trim() || 'N/A';
-            const company = $('span[itemprop="name"]').text().trim() || $('.company-name, .employer').first().text().trim() || 'N/A';
-            const location = $('span[itemprop="addressLocality"]').text().trim() || $('.location, .job-location').first().text().trim() || 'N/A';
-            const date_posted = $('meta[itemprop="datePosted"]').attr('content') || $('.date-posted, .job-date').first().text().trim() || null;
+            // Extract job title with multiple fallbacks
+            let title = $('h1[itemprop="title"]').text().trim() || 
+                       $('h1').first().text().trim() || 
+                       $('.job-title, .jobtitle').first().text().trim() ||
+                       $('title').text().split('|')[0].trim() ||
+                       'N/A';
 
-            const descriptionContainer = $('div[itemprop="description"]').length > 0 
-                ? $('div[itemprop="description"]') 
-                : $('.job-description, .description, .job-content').first();
+            // Extract company name with multiple fallbacks
+            let company = $('span[itemprop="name"]').text().trim() || 
+                         $('.company-name, .employer, .company').first().text().trim() ||
+                         $('td:contains("Company:"), td:contains("Employer:")').next().text().trim() ||
+                         'N/A';
+
+            // Extract location with multiple fallbacks
+            let location = $('span[itemprop="addressLocality"]').text().trim() || 
+                          $('.location, .job-location, .city').first().text().trim() ||
+                          $('td:contains("Location:"), td:contains("City:")').next().text().trim() ||
+                          'N/A';
+
+            // Extract posted date
+            let date_posted = $('meta[itemprop="datePosted"]').attr('content') || 
+                             $('.date-posted, .job-date, .posted').first().text().trim() ||
+                             $('td:contains("Posted:"), td:contains("Date:")').next().text().trim() ||
+                             null;
+
+            // Extract job description with multiple fallbacks
+            let descriptionContainer = $('div[itemprop="description"]');
+            if (descriptionContainer.length === 0) {
+                descriptionContainer = $('.job-description, .description, .job-content, .jobdescription').first();
+            }
+            if (descriptionContainer.length === 0) {
+                // Look for main content area
+                descriptionContainer = $('div.content, .main-content, #content').first();
+            }
+            if (descriptionContainer.length === 0) {
+                // Last resort - get the largest text block
+                let maxLength = 0;
+                $('div, p').each((_, el) => {
+                    const text = $(el).text().trim();
+                    if (text.length > maxLength && text.length > 100) {
+                        maxLength = text.length;
+                        descriptionContainer = $(el);
+                    }
+                });
+            }
+
             const description_html = descriptionContainer.html() || '';
             const description_text = htmlToText(description_html);
 
@@ -302,7 +432,7 @@ const crawler = new CheerioCrawler({
 
             await Dataset.pushData(item);
             jobsScraped++;
-            crawlerLog.info(`✓ Job ${jobsScraped}/${MAX_JOBS} saved: ${title}`);
+            crawlerLog.info(`✓ Job ${jobsScraped}/${MAX_JOBS} saved: ${title} at ${company}`);
         }
     },
 
