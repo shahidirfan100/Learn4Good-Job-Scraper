@@ -1,6 +1,7 @@
 // Learn4Good.com jobs scraper (CheerioCrawler) - FIXED VERSION
 import { Actor, log } from 'apify';
 import { CheerioCrawler, Dataset } from 'crawlee';
+import * as cheerio from 'cheerio';
 
 await Actor.init();
 
@@ -97,80 +98,55 @@ const cleanText = (text) => {
         .trim() || 'N/A';
 };
 
+// ------------------------- IMPROVED DESCRIPTION CLEANER (DOM-based) -------------------------
 const cleanDescription = (html) => {
     if (!html) return { html: '', text: '' };
-    
-    // Create a temporary container
-    const tempDiv = { innerHTML: html };
-    
-    // List of IDs and classes to remove (cookie banners, ads, navigation, etc.)
+
+    const $ = cheerio.load(html);
+
+    // Remove UI / non-content elements
     const removeSelectors = [
-        '#cookie_warning_container',
-        '#cookie_warning',
-        '.cookie_warning',
-        '.cookies_checkbox_update',
-        '.cookie_warning_controls',
-        '#privacy_policy',
-        '.advertisement',
-        '.ads',
-        '.banner',
-        'script',
-        'style',
-        'nav',
-        '.navigation',
-        '.menu',
-        'header',
-        'footer',
-        '.sidebar',
-        '.related-jobs',
-        '.similar-jobs',
-        'iframe',
-        '.social-share',
-        '.share-buttons'
+        'script', 'style', 'nav', 'header', 'footer', 'form', 'iframe',
+        'noscript', 'svg', 'canvas', 'button', 'input', 'select', 'option', 'label',
+        '.cookie', '#cookie', '[id*="cookie"]', '[class*="cookie"]',
+        '.ads', '.advertisement', '.banner', '.social', '.share', '.share-buttons',
+        '.search', '.filter', '.job-search', '.cv-search', '.navigation', '.menu',
+        '.sidebar', '.related-jobs', '.similar-jobs'
     ];
-    
-    // Remove unwanted elements using regex since we're working with string
-    let cleanedHtml = html;
-    
-    // Remove cookie warnings and related divs
-    cleanedHtml = cleanedHtml.replace(/<div[^>]*id=["']cookie[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
-    cleanedHtml = cleanedHtml.replace(/<div[^>]*class=["'][^"']*cookie[^"']*["'][^>]*>[\s\S]*?<\/div>/gi, '');
-    
-    // Remove scripts and styles
-    cleanedHtml = cleanedHtml.replace(/<script[^>]*>[\s\S]*?<\/script>/gi, '');
-    cleanedHtml = cleanedHtml.replace(/<style[^>]*>[\s\S]*?<\/style>/gi, '');
-    
-    // Remove navigation elements
-    cleanedHtml = cleanedHtml.replace(/<nav[^>]*>[\s\S]*?<\/nav>/gi, '');
-    cleanedHtml = cleanedHtml.replace(/<header[^>]*>[\s\S]*?<\/header>/gi, '');
-    cleanedHtml = cleanedHtml.replace(/<footer[^>]*>[\s\S]*?<\/footer>/gi, '');
-    
-    // Remove elements with too many attributes (likely complex UI elements)
-    cleanedHtml = cleanedHtml.replace(/<div[^>]{200,}>[\s\S]*?<\/div>/gi, '');
-    
-    // Convert to text
-    const cleanedText = htmlToText(cleanedHtml);
-    
-    // Further clean text by removing cookie/privacy policy related lines
-    const lines = cleanedText.split('\n').filter(line => {
-        const lower = line.toLowerCase().trim();
-        return lower.length > 15 && 
-               !lower.includes('cookie') &&
-               !lower.includes('privacy policy') &&
-               !lower.includes('manage settings') &&
-               !lower.includes('accept & continue') &&
-               !lower.includes('opt-out') &&
-               !lower.includes('advertising cookies') &&
-               !lower.includes('functional cookies') &&
-               !lower.includes('strictly necessary') &&
-               !lower.includes('update settings') &&
-               !lower.match(/^(home|jobs|search|login|register|apply now|view|click|back to)$/i);
+    $(removeSelectors.join(',')).remove();
+
+    // Remove superfluous tiny leaves
+    $('div, section, aside, article, span, li, p').each((_, el) => {
+        const txt = $(el).text().trim();
+        if (txt.length < 40 && $(el).children().length === 0) $(el).remove();
     });
-    
-    return {
-        html: cleanedHtml,
-        text: lines.join('\n\n').trim()
-    };
+
+    // Flatten redundant wrappers with too many attributes / widgets
+    $('div, section, article').each((_, el) => {
+        const attrCount = Object.keys(el.attribs || {}).length;
+        if (attrCount > 10 && $(el).find('input,select,button,form').length > 0) {
+            $(el).remove();
+        }
+    });
+
+    const cleanedHtml = $('body').html() || '';
+    const text = htmlToText(cleanedHtml);
+
+    // Filter cookie/privacy/menu lines from text
+    const lines = text.split('\n').filter((line) => {
+        const lower = line.toLowerCase().trim();
+        return (
+            lower.length > 15 &&
+            !lower.includes('cookie') &&
+            !lower.includes('privacy policy') &&
+            !lower.includes('manage settings') &&
+            !lower.includes('accept & continue') &&
+            !lower.includes('opt-out') &&
+            !lower.match(/^(home|jobs|search|login|register|apply now|view|click|back to)$/i)
+        );
+    });
+
+    return { html: cleanedHtml.trim(), text: lines.join('\n\n').trim() };
 };
 
 // ------------------------- START URLS -------------------------
@@ -189,17 +165,20 @@ const processedUrls = new Set();
 // ------------------------- CRAWLER -------------------------
 const crawler = new CheerioCrawler({
     proxyConfiguration: proxyConf,
-    maxRequestsPerMinute: 30,
-    requestHandlerTimeoutSecs: 180,
-    navigationTimeoutSecs: 120,
-    maxConcurrency: 2,
+
+    // ⚡ Faster but safe (was 30 RPM / 2 conc.) -> bump throughput
+    maxRequestsPerMinute: 120,
+    requestHandlerTimeoutSecs: 60,
+    navigationTimeoutSecs: 45,
+    maxConcurrency: 10,
+
     useSessionPool: true,
     persistCookiesPerSession: true,
     sessionPoolOptions: {
-        maxPoolSize: 10,
+        maxPoolSize: 20,
         sessionOptions: {
-            maxUsageCount: 50,
-            maxErrorScore: 2,
+            maxUsageCount: 100,
+            maxErrorScore: 3,
         },
     },
     maxRequestRetries: 5,
@@ -239,7 +218,7 @@ const crawler = new CheerioCrawler({
                 request.headers['Cookie'] = cookies;
             }
             
-            // Add small delay between requests
+            // Keep session metadata as-is
             if (session) {
                 session.userData = session.userData || {};
                 session.userData.lastRequestTime = Date.now();
@@ -303,18 +282,11 @@ const crawler = new CheerioCrawler({
             const linksToEnqueue = jobLinks.slice(0, Math.max(0, remainingSlots));
 
             if (collectDetails && linksToEnqueue.length > 0) {
-                // Enqueue with delay to avoid overwhelming the server
-                for (let i = 0; i < linksToEnqueue.length; i++) {
-                    await enqueueLinks({
-                        urls: [linksToEnqueue[i]],
-                        userData: { label: 'DETAIL' },
-                    });
-                    
-                    // Small delay between enqueueing
-                    if (i < linksToEnqueue.length - 1) {
-                        await new Promise(resolve => setTimeout(resolve, 100));
-                    }
-                }
+                // (⬇️ removed the artificial 100ms per-link delay to speed things up)
+                await enqueueLinks({
+                    urls: linksToEnqueue,
+                    userData: { label: 'DETAIL' },
+                });
                 crawlerLog.info(`Enqueued ${linksToEnqueue.length} detail pages`);
             } else if (!collectDetails) {
                 // Extract basic data from listing page
