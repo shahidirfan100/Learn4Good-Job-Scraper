@@ -60,29 +60,10 @@ const buildStartUrl = (kw, loc, date) => {
 };
 
 const toAbs = (href) => {
-    if (!href || typeof href !== 'string') return null;
-    
-    // Clean up the href
-    href = href.trim();
-    
-    // Skip empty strings, fragments, or javascript
-    if (!href || href === '#' || href.startsWith('javascript:') || href.startsWith('mailto:')) {
-        return null;
-    }
-    
-    // Skip single words that don't look like valid paths (common cause of "Invalid URL")
-    if (href.length < 2 || (href.length < 10 && !href.startsWith('/') && !href.startsWith('http'))) {
-        return null;
-    }
-    
+    if (!href) return null;
     try {
-        const url = new URL(href, 'https://www.learn4good.com');
-        // Only return URLs that are from learn4good.com domain
-        if (url.hostname === 'www.learn4good.com' || url.hostname === 'learn4good.com') {
-            return url.href;
-        }
-        return null;
-    } catch (error) {
+        return new URL(href, 'https://www.learn4good.com').href;
+    } catch {
         return null;
     }
 };
@@ -240,7 +221,6 @@ const proxyConf = proxyConfiguration
 // ------------------------- SHARED STATE -------------------------
 let jobsScraped = 0;
 let pagesVisited = 0;
-const processedUrls = new Set();
 
 // ------------------------- CRAWLER -------------------------
 const crawler = new CheerioCrawler({
@@ -332,28 +312,10 @@ const crawler = new CheerioCrawler({
             crawlerLog.info(`Processing LIST page ${pagesVisited}/${MAX_PAGES}: ${request.url}`);
             
             const jobLinks = [];
-            
-            // Learn4Good wraps each job in a specific structure
-            $('a').each((_, el) => {
+            $('a[href*="/jobs/"]').each((i, el) => {
                 const href = $(el).attr('href');
-                if (!href) return;
-                
-                // Match job detail URLs
-                if (href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?/)) {
-                    const fullUrl = toAbs(href);
-                    if (fullUrl && !jobLinks.includes(fullUrl) && !processedUrls.has(fullUrl)) {
-                        // Validate URL before adding
-                        try {
-                            new URL(fullUrl); // This will throw if invalid
-                            const linkText = cleanText($(el).text());
-                            if (linkText !== 'N/A' && linkText.length > 3) {
-                                jobLinks.push(fullUrl);
-                                processedUrls.add(fullUrl);
-                            }
-                        } catch (urlError) {
-                            crawlerLog.warning(`Invalid job URL skipped: ${fullUrl}`);
-                        }
-                    }
+                if (href && href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?$/)) {
+                    jobLinks.push(href);
                 }
             });
 
@@ -364,16 +326,16 @@ const crawler = new CheerioCrawler({
                 // Don't stop immediately - try next page
             }
 
-            const remainingSlots = MAX_JOBS - jobsScraped;
-            const linksToEnqueue = jobLinks.slice(0, Math.max(0, remainingSlots));
-
-            if (collectDetails && linksToEnqueue.length > 0) {
-                // (⬇️ removed the artificial 100ms per-link delay to speed things up)
-                await enqueueLinks({
-                    urls: linksToEnqueue,
-                    userData: { label: 'DETAIL' },
-                });
-                crawlerLog.info(`Enqueued ${linksToEnqueue.length} detail pages`);
+            if (collectDetails && jobLinks.length > 0) {
+                // Queue job detail requests
+                for (const jobHref of jobLinks) {
+                    const absoluteUrl = toAbs(jobHref);
+                    await enqueueLinks({
+                        urls: [absoluteUrl],
+                        userData: { label: 'DETAIL' },
+                    });
+                }
+                crawlerLog.info(`Enqueued ${jobLinks.length} detail pages`);
             } else if (!collectDetails) {
                 // Extract basic data from listing page
                 for (const jobLink of linksToEnqueue) {
@@ -436,157 +398,17 @@ const crawler = new CheerioCrawler({
                 }
             }
 
-            // Pagination logic - handle both search results and category listing pages
-            const currentUrl = new URL(request.url);
-            const isSearchResultPage = currentUrl.searchParams.has('controller') && 
-                                     currentUrl.searchParams.get('controller') === 'job_list' &&
-                                     currentUrl.searchParams.has('action');
-            
-            // Check if it's a category/location listing page that can have pagination
-            const isListingPage = request.url.includes('/jobs/') && !request.url.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?$/);
-            
-            // Pagination should happen for search results OR listing pages, but NOT individual job pages
-            const shouldPaginate = (isSearchResultPage || isListingPage) && 
-                                 jobsScraped < MAX_JOBS && 
-                                 pagesVisited < MAX_PAGES && 
-                                 jobLinks.length > 0;
-            
-            if (shouldPaginate) {
-                let nextUrl = null;
-                
-                try {
-                    if (isSearchResultPage) {
-                        // Search results use 'page_number' parameter
-                        const currentPage = parseInt(currentUrl.searchParams.get('page_number') || '1');
-                        
-                        if (currentPage < 100) { // Safety limit
-                            const nextPageUrl = new URL(currentUrl);
-                            nextPageUrl.searchParams.set('page_number', (currentPage + 1).toString());
-                            nextUrl = nextPageUrl.href;
-                            crawlerLog.info(`Search results - next page ${currentPage + 1}: ${nextUrl}`);
-                        }
-                    } else if (isListingPage) {
-                        // For listing pages, first try to find actual pagination links on the page
-                        const nextSelectors = [
-                            'a:contains("Next")', 'a:contains("next")', 'a:contains(">")',
-                            'a[title*="Next"]', 'a[title*="next"]', '.next a', '.pagination a:last'
-                        ];
-                        
-                        for (const selector of nextSelectors) {
-                            try {
-                                const $nextLink = $(selector);
-                                if ($nextLink.length > 0) {
-                                    let href = $nextLink.attr('href');
-                                    if (href && !href.includes('javascript') && href !== '#' && href.trim() !== '') {
-                                        // Ensure we have a valid href before processing
-                                        href = href.trim();
-                                        
-                                        // Skip single words or very short hrefs that aren't valid paths
-                                        if (href.length < 2 || (href.length < 10 && !href.startsWith('/') && !href.startsWith('http'))) {
-                                            continue;
-                                        }
-                                        
-                                        nextUrl = toAbs(href);
-                                        if (nextUrl && nextUrl !== request.url && nextUrl.startsWith('https://')) {
-                                            crawlerLog.info(`Found next link with selector "${selector}": ${nextUrl}`);
-                                            break;
-                                        }
-                                    }
-                                }
-                            } catch (e) {
-                                // Continue with next selector
-                            }
-                        }
-                        
-                        // If no pagination links found, try to construct next page URL
-                        if (!nextUrl) {
-                            // Try different URL patterns for Learn4Good category pages
-                            const patterns = [
-                                // Pattern 1: append ?page=N
-                                () => {
-                                    try {
-                                        const url = new URL(request.url);
-                                        const currentPage = parseInt(url.searchParams.get('page') || '1');
-                                        if (currentPage < 50) {
-                                            url.searchParams.set('page', (currentPage + 1).toString());
-                                            return url.href;
-                                        }
-                                    } catch (e) {
-                                        // URL parsing failed
-                                    }
-                                    return null;
-                                },
-                                // Pattern 2: append ?start=N (offset-based)
-                                () => {
-                                    try {
-                                        const url = new URL(request.url);
-                                        const currentStart = parseInt(url.searchParams.get('start') || '0');
-                                        if (currentStart < 1000) {
-                                            url.searchParams.set('start', (currentStart + 20).toString()); // Assume 20 jobs per page
-                                            return url.href;
-                                        }
-                                    } catch (e) {
-                                        // URL parsing failed
-                                    }
-                                    return null;
-                                },
-                                // Pattern 3: /page/N/ in path
-                                () => {
-                                    let baseUrl = request.url.replace(/\/page\/\d+\/?$/, '').replace(/\?.*$/, '').replace(/\/$/, '');
-                                    let currentPage = 1;
-                                    const pageMatch = request.url.match(/\/page\/(\d+)/);
-                                    if (pageMatch) {
-                                        currentPage = parseInt(pageMatch[1]);
-                                    }
-                                    if (currentPage < 50) {
-                                        return `${baseUrl}/page/${currentPage + 1}/`;
-                                    }
-                                    return null;
-                                }
-                            ];
-                            
-                            for (const pattern of patterns) {
-                                try {
-                                    const testUrl = pattern();
-                                    if (testUrl && testUrl !== request.url) {
-                                        nextUrl = testUrl;
-                                        crawlerLog.info(`Constructed next page URL using pattern: ${nextUrl}`);
-                                        break;
-                                    }
-                                } catch (e) {
-                                    // Continue with next pattern
-                                }
-                            }
-                        }
-                    }
-                    
-                    if (nextUrl) {
-                        // Double-check URL validity before enqueueing
-                        try {
-                            new URL(nextUrl); // This will throw if invalid
-                            await enqueueLinks({
-                                urls: [nextUrl],
-                                userData: { label: 'LIST' },
-                            });
-                            crawlerLog.info(`Enqueued next page (${pagesVisited + 1}): ${nextUrl}`);
-                        } catch (urlError) {
-                            crawlerLog.warning(`Invalid next page URL, skipping: ${nextUrl} - Error: ${urlError.message}`);
-                        }
-                    } else {
-                        crawlerLog.info('No valid next page URL found or reached safety limit');
-                    }
-                    
-                } catch (e) {
-                    crawlerLog.warning(`Pagination error: ${e.message}`);
+            // Look for next page
+            if (pagesVisited < MAX_PAGES && jobsScraped < MAX_JOBS) {
+                const nextLink = $('a:contains("Next")').first();
+                if (nextLink.length) {
+                    const nextUrl = toAbs(nextLink.attr('href'));
+                    await enqueueLinks({
+                        urls: [nextUrl],
+                        userData: { label: 'LIST' },
+                    });
+                    crawlerLog.info(`Found next page: ${nextUrl}`);
                 }
-            } else if ((isSearchResultPage || isListingPage) && jobLinks.length === 0) {
-                crawlerLog.info('No job links found on this page - likely reached end of results');
-            } else if (!isSearchResultPage && !isListingPage) {
-                crawlerLog.info('Individual job page detected - no pagination needed');
-            } else if (pagesVisited >= MAX_PAGES) {
-                crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping.`);
-            } else if (jobsScraped >= MAX_JOBS) {
-                crawlerLog.info(`Reached job limit (${jobsScraped}/${MAX_JOBS}). Stopping.`);
             }
         }
 
