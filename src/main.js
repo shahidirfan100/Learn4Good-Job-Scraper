@@ -98,6 +98,48 @@ const cleanText = (text) => {
         .trim() || 'N/A';
 };
 
+const formatLocation = (locationString) => {
+    if (!locationString || locationString === 'N/A') return 'N/A';
+    
+    // Split the location by commas and clean each part
+    const parts = locationString.split(',').map(part => part.trim()).filter(part => part);
+    
+    if (parts.length === 0) return 'N/A';
+    
+    // For locations like "Detroit, Wayne County, Michigan, 48255, USA"
+    // We want to return "Detroit, USA"
+    
+    // Find the country (usually the last non-numeric part)
+    let country = null;
+    let city = parts[0]; // First part is usually the city
+    
+    // Look for common country patterns (USA, United States, etc.)
+    for (let i = parts.length - 1; i >= 0; i--) {
+        const part = parts[i];
+        // Skip numeric parts (like zip codes)
+        if (!/^\d+$/.test(part)) {
+            // Check if it looks like a country
+            if (/^(USA|US|United States|America|UK|United Kingdom|Canada|Australia|Germany|France|Italy|Spain|Netherlands|Belgium|Switzerland|Austria|Denmark|Sweden|Norway|Finland|Ireland|Poland|Czech Republic|Hungary|Romania|Bulgaria|Croatia|Slovenia|Slovakia|Estonia|Latvia|Lithuania|Greece|Portugal|Luxembourg|Malta|Cyprus)$/i.test(part)) {
+                country = part;
+                break;
+            }
+            // If no obvious country found, use the last non-numeric part as country
+            if (i === parts.length - 1 || (i === parts.length - 2 && /^\d+$/.test(parts[parts.length - 1]))) {
+                country = part;
+                break;
+            }
+        }
+    }
+    
+    // If we found a country and it's different from the city, return "City, Country"
+    if (country && country !== city) {
+        return `${city}, ${country}`;
+    }
+    
+    // If no country found or country is same as city, return just the city
+    return city;
+};
+
 // ------------------------- IMPROVED DESCRIPTION CLEANER (DOM-based) -------------------------
 const cleanDescription = (html) => {
     if (!html) return { html: '', text: '' };
@@ -328,9 +370,10 @@ const crawler = new CheerioCrawler({
                     }
                     
                     let location = 'N/A';
-                    const locationMatch = containerText.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
+                    const locationMatch = containerText.match(/Job in\s+([^\n]+)/);
                     if (locationMatch) {
-                        location = cleanText(locationMatch[1]);
+                        const rawLocation = cleanText(locationMatch[1]);
+                        location = formatLocation(rawLocation);
                     }
                     
                     let date_posted = null;
@@ -462,9 +505,10 @@ const crawler = new CheerioCrawler({
             $('*').each((_, el) => {
                 const text = $(el).text();
                 if (text.includes('Job in')) {
-                    const match = text.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
+                    const match = text.match(/Job in\s+([^\n]+)/);
                     if (match) {
-                        location = cleanText(match[1]);
+                        const rawLocation = cleanText(match[1]);
+                        location = formatLocation(rawLocation);
                         return false;
                     }
                 }
