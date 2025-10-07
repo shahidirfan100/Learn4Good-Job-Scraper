@@ -426,20 +426,82 @@ const crawler = new CheerioCrawler({
                             crawlerLog.info(`Search results - next page ${currentPage + 1}: ${nextUrl}`);
                         }
                     } else if (isListingPage) {
-                        // Category/location listing pages might use different pagination patterns
-                        // Try common pagination patterns
-                        let baseUrl = request.url.replace(/\/page\/\d+\/?$/, '').replace(/\/$/, '');
+                        // For listing pages, first try to find actual pagination links on the page
+                        const nextSelectors = [
+                            'a:contains("Next")', 'a:contains("next")', 'a:contains(">")',
+                            'a[title*="Next"]', 'a[title*="next"]', '.next a', '.pagination a:last',
+                            'a[href*="page"]', 'a[href*="start"]', 'a[href*="offset"]'
+                        ];
                         
-                        // Extract current page from URL or assume page 1
-                        let currentPage = 1;
-                        const pageMatch = request.url.match(/\/page\/(\d+)/);
-                        if (pageMatch) {
-                            currentPage = parseInt(pageMatch[1]);
+                        for (const selector of nextSelectors) {
+                            try {
+                                const $nextLink = $(selector);
+                                if ($nextLink.length > 0) {
+                                    const href = $nextLink.attr('href');
+                                    if (href && !href.includes('javascript') && href !== '#') {
+                                        nextUrl = toAbs(href);
+                                        if (nextUrl && nextUrl !== request.url) {
+                                            crawlerLog.info(`Found next link with selector "${selector}": ${nextUrl}`);
+                                            break;
+                                        }
+                                    }
+                                }
+                            } catch (e) {
+                                // Continue with next selector
+                            }
                         }
                         
-                        if (currentPage < 100) { // Safety limit
-                            nextUrl = `${baseUrl}/page/${currentPage + 1}/`;
-                            crawlerLog.info(`Listing page - next page ${currentPage + 1}: ${nextUrl}`);
+                        // If no pagination links found, try to construct next page URL
+                        if (!nextUrl) {
+                            // Try different URL patterns for Learn4Good category pages
+                            const patterns = [
+                                // Pattern 1: append ?page=N
+                                () => {
+                                    const url = new URL(request.url);
+                                    const currentPage = parseInt(url.searchParams.get('page') || '1');
+                                    if (currentPage < 50) {
+                                        url.searchParams.set('page', (currentPage + 1).toString());
+                                        return url.href;
+                                    }
+                                    return null;
+                                },
+                                // Pattern 2: append ?start=N (offset-based)
+                                () => {
+                                    const url = new URL(request.url);
+                                    const currentStart = parseInt(url.searchParams.get('start') || '0');
+                                    if (currentStart < 1000) {
+                                        url.searchParams.set('start', (currentStart + 20).toString()); // Assume 20 jobs per page
+                                        return url.href;
+                                    }
+                                    return null;
+                                },
+                                // Pattern 3: /page/N/ in path
+                                () => {
+                                    let baseUrl = request.url.replace(/\/page\/\d+\/?$/, '').replace(/\?.*$/, '').replace(/\/$/, '');
+                                    let currentPage = 1;
+                                    const pageMatch = request.url.match(/\/page\/(\d+)/);
+                                    if (pageMatch) {
+                                        currentPage = parseInt(pageMatch[1]);
+                                    }
+                                    if (currentPage < 50) {
+                                        return `${baseUrl}/page/${currentPage + 1}/`;
+                                    }
+                                    return null;
+                                }
+                            ];
+                            
+                            for (const pattern of patterns) {
+                                try {
+                                    const testUrl = pattern();
+                                    if (testUrl && testUrl !== request.url) {
+                                        nextUrl = testUrl;
+                                        crawlerLog.info(`Constructed next page URL using pattern: ${nextUrl}`);
+                                        break;
+                                    }
+                                } catch (e) {
+                                    // Continue with next pattern
+                                }
+                            }
                         }
                     }
                     
