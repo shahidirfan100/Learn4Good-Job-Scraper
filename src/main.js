@@ -396,13 +396,16 @@ const crawler = new CheerioCrawler({
                 }
             }
 
-            // Pagination - Continue as long as we haven't hit limits and we found jobs on this page
-            if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES && jobLinks.length > 0) {
+            // Pagination - Only for search result pages, not direct URLs
+            const currentUrl = new URL(request.url);
+            const isSearchResultPage = currentUrl.searchParams.has('controller') && 
+                                     currentUrl.searchParams.get('controller') === 'job_list' &&
+                                     currentUrl.searchParams.has('action');
+            
+            if (isSearchResultPage && jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES && jobLinks.length > 0) {
                 let nextUrl = null;
                 
                 try {
-                    const currentUrl = new URL(request.url);
-                    
                     // Learn4Good uses 'page_number' parameter for pagination
                     const currentPage = parseInt(currentUrl.searchParams.get('page_number') || '1');
                     
@@ -426,12 +429,14 @@ const crawler = new CheerioCrawler({
                 } catch (e) {
                     crawlerLog.warning(`Pagination error: ${e.message}`);
                 }
+            } else if (isSearchResultPage && jobLinks.length === 0) {
+                crawlerLog.info('No job links found on search results page - likely reached end of results');
+            } else if (!isSearchResultPage) {
+                crawlerLog.info('Direct URL detected - no pagination needed, processing individual job links');
             } else if (pagesVisited >= MAX_PAGES) {
                 crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping.`);
             } else if (jobsScraped >= MAX_JOBS) {
                 crawlerLog.info(`Reached job limit (${jobsScraped}/${MAX_JOBS}). Stopping.`);
-            } else if (jobLinks.length === 0) {
-                crawlerLog.info('No job links found on this page - likely reached end of results');
             }
         }
 
