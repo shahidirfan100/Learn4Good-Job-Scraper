@@ -490,6 +490,9 @@ const crawler = new CheerioCrawler({
 
             crawlerLog.info(`Processing detail: ${request.url}`);
 
+            // Cache full page body text once for fast regex-based extraction
+            const bodyText = $('body').text();
+
             // Extract job title
             let title = cleanText($('h1').first().text());
             if (title === 'N/A') {
@@ -498,34 +501,19 @@ const crawler = new CheerioCrawler({
 
             // Extract company
             let company = 'N/A';
-            $('*').each((_, el) => {
-                const text = $(el).text();
-                if (text.includes('Listing for:')) {
-                    const match = text.match(/Listing for:\s*([^\n]+)/);
-                    if (match) {
-                        company = cleanText(match[1]);
-                        return false;
-                    }
-                }
-            });
+            const compMatch = bodyText.match(/Listing for:\s*([^\n]+)/);
+            if (compMatch) company = cleanText(compMatch[1]);
 
             // Extract location (robust against postal codes like [07006, Spain])
             let location = 'N/A';
-            $('*').each((_, el) => {
-                const text = $(el).text();
-                if (text.includes('Job in')) {
-                    const match = text.match(/Job in\s+([^,\n\[]+(?:,\s*[^,\n\]]+)?|\[[^\]]+\])/);
-                    if (match) {
-                        const rawLoc = cleanText(match[1]);
-                        location = formatLocation(rawLoc);
-                        return false;
-                    }
+                const locMatch = bodyText.match(/Job in\s+([^,\n\[]+(?:,\s*[^,\n\]]+)?|\[[^\]]+\])/);
+                if (locMatch) {
+                    const rawLoc = cleanText(locMatch[1]);
+                    location = formatLocation(rawLoc);
                 }
-            });
 
             // Extract job type
             let job_type = undefined;
-            const bodyText = $('body').text();
             const typeMatch = bodyText.match(/\b(Full[\s-]?[Tt]ime|Part[\s-]?[Tt]ime|Contract|Temporary|Permanent|Freelance|Internship|Remote)\b/);
             if (typeMatch) {
                 job_type = cleanText(typeMatch[1]);
@@ -544,16 +532,8 @@ const crawler = new CheerioCrawler({
 
             // Extract date posted
             let date_posted = null;
-            $('*').each((_, el) => {
-                const text = $(el).text();
-                if (text.includes('Listed on')) {
-                    const match = text.match(/Listed on\s+(\d{4}-\d{2}-\d{2})/);
-                    if (match) {
-                        date_posted = match[1];
-                        return false;
-                    }
-                }
-            });
+                const dateMatch = bodyText.match(/Listed on\s+(\d{4}-\d{2}-\d{2})/);
+                if (dateMatch) date_posted = dateMatch[1];
 
             // Extract salary
             let salary = undefined;
