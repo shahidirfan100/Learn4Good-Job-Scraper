@@ -60,10 +60,29 @@ const buildStartUrl = (kw, loc, date) => {
 };
 
 const toAbs = (href) => {
-    if (!href) return null;
+    if (!href || typeof href !== 'string') return null;
+    
+    // Clean up the href
+    href = href.trim();
+    
+    // Skip empty strings, fragments, or javascript
+    if (!href || href === '#' || href.startsWith('javascript:') || href.startsWith('mailto:')) {
+        return null;
+    }
+    
+    // Skip single words that don't look like valid paths (common cause of "Invalid URL")
+    if (href.length < 2 || (href.length < 10 && !href.startsWith('/') && !href.startsWith('http'))) {
+        return null;
+    }
+    
     try {
-        return new URL(href, 'https://www.learn4good.com').href;
-    } catch {
+        const url = new URL(href, 'https://www.learn4good.com');
+        // Only return URLs that are from learn4good.com domain
+        if (url.hostname === 'www.learn4good.com' || url.hostname === 'learn4good.com') {
+            return url.href;
+        }
+        return null;
+    } catch (error) {
         return null;
     }
 };
@@ -199,6 +218,20 @@ const cleanDescription = (html) => {
 // ------------------------- START URLS -------------------------
 const finalStartUrl = startUrl || buildStartUrl(keyword, location, posted_date);
 
+// Determine scraping method for logging and debugging
+let scrapingMethod = 'unknown';
+if (startUrl) {
+    if (startUrl.includes('/jobs/') && startUrl.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?$/)) {
+        scrapingMethod = 'single-job';
+    } else if (startUrl.includes('/jobs/')) {
+        scrapingMethod = 'category';
+    } else {
+        scrapingMethod = 'url';
+    }
+} else if (keyword || location) {
+    scrapingMethod = 'keyword';
+}
+
 // ------------------------- PROXY -------------------------
 const proxyConf = proxyConfiguration
     ? await Actor.createProxyConfiguration(proxyConfiguration)
@@ -309,10 +342,16 @@ const crawler = new CheerioCrawler({
                 if (href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?/)) {
                     const fullUrl = toAbs(href);
                     if (fullUrl && !jobLinks.includes(fullUrl) && !processedUrls.has(fullUrl)) {
-                        const linkText = cleanText($(el).text());
-                        if (linkText !== 'N/A' && linkText.length > 3) {
-                            jobLinks.push(fullUrl);
-                            processedUrls.add(fullUrl);
+                        // Validate URL before adding
+                        try {
+                            new URL(fullUrl); // This will throw if invalid
+                            const linkText = cleanText($(el).text());
+                            if (linkText !== 'N/A' && linkText.length > 3) {
+                                jobLinks.push(fullUrl);
+                                processedUrls.add(fullUrl);
+                            }
+                        } catch (urlError) {
+                            crawlerLog.warning(`Invalid job URL skipped: ${fullUrl}`);
                         }
                     }
                 }
@@ -386,6 +425,7 @@ const crawler = new CheerioCrawler({
                         description_html,
                         description_text,
                         url: jobLink,
+                        method: scrapingMethod,
                     };
 
                     await Dataset.pushData(item);
@@ -429,18 +469,25 @@ const crawler = new CheerioCrawler({
                         // For listing pages, first try to find actual pagination links on the page
                         const nextSelectors = [
                             'a:contains("Next")', 'a:contains("next")', 'a:contains(">")',
-                            'a[title*="Next"]', 'a[title*="next"]', '.next a', '.pagination a:last',
-                            'a[href*="page"]', 'a[href*="start"]', 'a[href*="offset"]'
+                            'a[title*="Next"]', 'a[title*="next"]', '.next a', '.pagination a:last'
                         ];
                         
                         for (const selector of nextSelectors) {
                             try {
                                 const $nextLink = $(selector);
                                 if ($nextLink.length > 0) {
-                                    const href = $nextLink.attr('href');
-                                    if (href && !href.includes('javascript') && href !== '#') {
+                                    let href = $nextLink.attr('href');
+                                    if (href && !href.includes('javascript') && href !== '#' && href.trim() !== '') {
+                                        // Ensure we have a valid href before processing
+                                        href = href.trim();
+                                        
+                                        // Skip single words or very short hrefs that aren't valid paths
+                                        if (href.length < 2 || (href.length < 10 && !href.startsWith('/') && !href.startsWith('http'))) {
+                                            continue;
+                                        }
+                                        
                                         nextUrl = toAbs(href);
-                                        if (nextUrl && nextUrl !== request.url) {
+                                        if (nextUrl && nextUrl !== request.url && nextUrl.startsWith('https://')) {
                                             crawlerLog.info(`Found next link with selector "${selector}": ${nextUrl}`);
                                             break;
                                         }
@@ -457,21 +504,29 @@ const crawler = new CheerioCrawler({
                             const patterns = [
                                 // Pattern 1: append ?page=N
                                 () => {
-                                    const url = new URL(request.url);
-                                    const currentPage = parseInt(url.searchParams.get('page') || '1');
-                                    if (currentPage < 50) {
-                                        url.searchParams.set('page', (currentPage + 1).toString());
-                                        return url.href;
+                                    try {
+                                        const url = new URL(request.url);
+                                        const currentPage = parseInt(url.searchParams.get('page') || '1');
+                                        if (currentPage < 50) {
+                                            url.searchParams.set('page', (currentPage + 1).toString());
+                                            return url.href;
+                                        }
+                                    } catch (e) {
+                                        // URL parsing failed
                                     }
                                     return null;
                                 },
                                 // Pattern 2: append ?start=N (offset-based)
                                 () => {
-                                    const url = new URL(request.url);
-                                    const currentStart = parseInt(url.searchParams.get('start') || '0');
-                                    if (currentStart < 1000) {
-                                        url.searchParams.set('start', (currentStart + 20).toString()); // Assume 20 jobs per page
-                                        return url.href;
+                                    try {
+                                        const url = new URL(request.url);
+                                        const currentStart = parseInt(url.searchParams.get('start') || '0');
+                                        if (currentStart < 1000) {
+                                            url.searchParams.set('start', (currentStart + 20).toString()); // Assume 20 jobs per page
+                                            return url.href;
+                                        }
+                                    } catch (e) {
+                                        // URL parsing failed
                                     }
                                     return null;
                                 },
@@ -506,13 +561,19 @@ const crawler = new CheerioCrawler({
                     }
                     
                     if (nextUrl) {
-                        await enqueueLinks({
-                            urls: [nextUrl],
-                            userData: { label: 'LIST' },
-                        });
-                        crawlerLog.info(`Enqueued next page (${pagesVisited + 1}): ${nextUrl}`);
+                        // Double-check URL validity before enqueueing
+                        try {
+                            new URL(nextUrl); // This will throw if invalid
+                            await enqueueLinks({
+                                urls: [nextUrl],
+                                userData: { label: 'LIST' },
+                            });
+                            crawlerLog.info(`Enqueued next page (${pagesVisited + 1}): ${nextUrl}`);
+                        } catch (urlError) {
+                            crawlerLog.warning(`Invalid next page URL, skipping: ${nextUrl} - Error: ${urlError.message}`);
+                        }
                     } else {
-                        crawlerLog.info('Reached maximum page safety limit (100)');
+                        crawlerLog.info('No valid next page URL found or reached safety limit');
                     }
                     
                 } catch (e) {
@@ -694,6 +755,7 @@ const crawler = new CheerioCrawler({
                 description_html,
                 description_text,
                 url: request.url,
+                method: scrapingMethod,
             };
 
             await Dataset.pushData(item);
@@ -708,11 +770,12 @@ const crawler = new CheerioCrawler({
 });
 
 log.info('Starting Learn4Good scraper...');
+log.info(`Scraping Method: ${scrapingMethod}`);
 log.info(`Configuration: MAX_JOBS=${MAX_JOBS}, MAX_PAGES=${MAX_PAGES}, collectDetails=${collectDetails}`);
 log.info(`Search params - keyword: ${keyword || 'N/A'}, location: ${location || 'N/A'}, posted_date: ${posted_date}`);
 log.info(`Final Start URL: ${finalStartUrl}`);
 
 await crawler.run([finalStartUrl]);
-log.info(`✓ Scraping completed. Jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
+log.info(`✓ Scraping completed using ${scrapingMethod} method. Jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
 
 await Actor.exit();
