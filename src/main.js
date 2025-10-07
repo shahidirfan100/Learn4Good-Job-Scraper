@@ -106,38 +106,22 @@ const formatLocation = (locationString) => {
     
     if (parts.length === 0) return 'N/A';
     
-    // For locations like "Detroit, Wayne County, Michigan, 48255, USA"
-    // We want to return "Detroit, USA"
+    // Get the first part (city) and last part (country)
+    const firstPart = parts[0];
+    const lastPart = parts[parts.length - 1];
     
-    // Find the country (usually the last non-numeric part)
-    let country = null;
-    let city = parts[0]; // First part is usually the city
-    
-    // Look for common country patterns (USA, United States, etc.)
-    for (let i = parts.length - 1; i >= 0; i--) {
-        const part = parts[i];
-        // Skip numeric parts (like zip codes)
-        if (!/^\d+$/.test(part)) {
-            // Check if it looks like a country
-            if (/^(USA|US|United States|America|UK|United Kingdom|Canada|Australia|Germany|France|Italy|Spain|Netherlands|Belgium|Switzerland|Austria|Denmark|Sweden|Norway|Finland|Ireland|Poland|Czech Republic|Hungary|Romania|Bulgaria|Croatia|Slovenia|Slovakia|Estonia|Latvia|Lithuania|Greece|Portugal|Luxembourg|Malta|Cyprus)$/i.test(part)) {
-                country = part;
-                break;
-            }
-            // If no obvious country found, use the last non-numeric part as country
-            if (i === parts.length - 1 || (i === parts.length - 2 && /^\d+$/.test(parts[parts.length - 1]))) {
-                country = part;
-                break;
-            }
-        }
+    // If the first part starts with numbers or looks like a ZIP/postal code, only return the country
+    if (/^\d/.test(firstPart) || /^\d{5}(-\d{4})?$/.test(firstPart) || /^[A-Z]\d[A-Z]\s?\d[A-Z]\d$/.test(firstPart)) {
+        return lastPart;
     }
     
-    // If we found a country and it's different from the city, return "City, Country"
-    if (country && country !== city) {
-        return `${city}, ${country}`;
+    // If we have only one part, return it
+    if (parts.length === 1) {
+        return firstPart;
     }
     
-    // If no country found or country is same as city, return just the city
-    return city;
+    // Return "City, Country" format
+    return `${firstPart}, ${lastPart}`;
 };
 
 // ------------------------- IMPROVED DESCRIPTION CLEANER (DOM-based) -------------------------
@@ -370,15 +354,26 @@ const crawler = new CheerioCrawler({
                     }
                     
                     let location = 'N/A';
-                    const locationMatch = containerText.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
+                    const locationMatch = containerText.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)*)/);
                     if (locationMatch) {
-                        location = cleanText(locationMatch[1]);
+                        location = formatLocation(cleanText(locationMatch[1]));
                     }
                     
                     let date_posted = null;
                     const dateMatch = containerText.match(/Listed on\s+(\d{4}-\d{2}-\d{2})/);
                     if (dateMatch) {
                         date_posted = dateMatch[1];
+                    }
+                    
+                    // Extract brief description from container with same cleaning logic
+                    let description_html = '';
+                    let description_text = '';
+                    
+                    const containerHtml = container.html() || '';
+                    if (containerHtml) {
+                        const cleaned = cleanDescription(containerHtml);
+                        description_html = cleaned.html;
+                        description_text = cleaned.text;
                     }
                     
                     const item = {
@@ -388,8 +383,8 @@ const crawler = new CheerioCrawler({
                         salary: undefined,
                         job_type: undefined,
                         date_posted,
-                        description_html: '',
-                        description_text: '',
+                        description_html,
+                        description_text,
                         url: jobLink,
                     };
 
@@ -401,65 +396,31 @@ const crawler = new CheerioCrawler({
                 }
             }
 
-            // Pagination - Continue as long as we haven't hit limits
-            if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES) {
+            // Pagination - Continue as long as we haven't hit limits and we found jobs on this page
+            if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES && jobLinks.length > 0) {
                 let nextUrl = null;
                 
                 try {
-                    // Method 1: Look for actual "Next" links on the page
-                    const nextSelectors = [
-                        'a:contains("Next")', 'a:contains("next")', 'a:contains(">")',
-                        'a[title*="Next"]', 'a[title*="next"]', '.next a',
-                        '.pagination a:last', 'a[href*="page"]'
-                    ];
+                    const currentUrl = new URL(request.url);
                     
-                    for (const selector of nextSelectors) {
-                        const link = $(selector).attr('href');
-                        if (link && !link.includes('javascript')) {
-                            nextUrl = toAbs(link);
-                            crawlerLog.info(`Found next page with selector: ${selector} -> ${nextUrl}`);
-                            break;
-                        }
-                    }
+                    // Learn4Good uses 'page_number' parameter for pagination
+                    const currentPage = parseInt(currentUrl.searchParams.get('page_number') || '1');
                     
-                    // Method 2: Try different parameter patterns if no next link found
-                    if (!nextUrl) {
-                        const currentUrl = new URL(request.url);
+                    // Construct next page URL by incrementing page_number
+                    if (currentPage < 100) { // Safety limit to prevent infinite loops
+                        const nextPageUrl = new URL(currentUrl);
+                        nextPageUrl.searchParams.set('page_number', (currentPage + 1).toString());
+                        nextUrl = nextPageUrl.href;
                         
-                        // Try different pagination parameter patterns
-                        const patterns = [
-                            'page_number', 'page', 'p', 'start', 'offset'
-                        ];
+                        crawlerLog.info(`Constructed next page URL (page ${currentPage + 1}): ${nextUrl}`);
                         
-                        for (const param of patterns) {
-                            const currentPage = parseInt(currentUrl.searchParams.get(param) || '1');
-                            if (currentPage < 50) { // Safety limit
-                                const testUrl = new URL(currentUrl);
-                                testUrl.searchParams.set(param, (currentPage + 1).toString());
-                                nextUrl = testUrl.href;
-                                crawlerLog.info(`Constructed next page using ${param}: ${nextUrl}`);
-                                break;
-                            }
-                        }
-                    }
-                    
-                    // Method 3: If still no URL and it's the first few pages, try appending page number
-                    if (!nextUrl && pagesVisited <= 5) {
-                        const baseUrl = request.url.split('?')[0];
-                        if (!baseUrl.includes('page')) {
-                            nextUrl = `${baseUrl}?page=${pagesVisited + 1}`;
-                            crawlerLog.info(`Constructed simple page URL: ${nextUrl}`);
-                        }
-                    }
-                    
-                    if (nextUrl) {
                         await enqueueLinks({
                             urls: [nextUrl],
                             userData: { label: 'LIST' },
                         });
                         crawlerLog.info(`Enqueued next page (${pagesVisited + 1}): ${nextUrl}`);
                     } else {
-                        crawlerLog.info('No more pages to try - ending pagination');
+                        crawlerLog.info('Reached maximum page safety limit (100)');
                     }
                     
                 } catch (e) {
@@ -469,6 +430,8 @@ const crawler = new CheerioCrawler({
                 crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping.`);
             } else if (jobsScraped >= MAX_JOBS) {
                 crawlerLog.info(`Reached job limit (${jobsScraped}/${MAX_JOBS}). Stopping.`);
+            } else if (jobLinks.length === 0) {
+                crawlerLog.info('No job links found on this page - likely reached end of results');
             }
         }
 
@@ -504,9 +467,9 @@ const crawler = new CheerioCrawler({
             $('*').each((_, el) => {
                 const text = $(el).text();
                 if (text.includes('Job in')) {
-                    const match = text.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
+                    const match = text.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)*)/);
                     if (match) {
-                        location = cleanText(match[1]);
+                        location = formatLocation(cleanText(match[1]));
                         return false;
                     }
                 }
