@@ -98,6 +98,48 @@ const cleanText = (text) => {
         .trim() || 'N/A';
 };
 
+const formatLocation = (locationString) => {
+    if (!locationString || locationString === 'N/A') return 'N/A';
+    
+    // Split the location by commas and clean each part
+    const parts = locationString.split(',').map(part => part.trim()).filter(part => part);
+    
+    if (parts.length === 0) return 'N/A';
+    
+    // For locations like "Detroit, Wayne County, Michigan, 48255, USA"
+    // We want to return "Detroit, USA"
+    
+    // Find the country (usually the last non-numeric part)
+    let country = null;
+    let city = parts[0]; // First part is usually the city
+    
+    // Look for common country patterns (USA, United States, etc.)
+    for (let i = parts.length - 1; i >= 0; i--) {
+        const part = parts[i];
+        // Skip numeric parts (like zip codes)
+        if (!/^\d+$/.test(part)) {
+            // Check if it looks like a country
+            if (/^(USA|US|United States|America|UK|United Kingdom|Canada|Australia|Germany|France|Italy|Spain|Netherlands|Belgium|Switzerland|Austria|Denmark|Sweden|Norway|Finland|Ireland|Poland|Czech Republic|Hungary|Romania|Bulgaria|Croatia|Slovenia|Slovakia|Estonia|Latvia|Lithuania|Greece|Portugal|Luxembourg|Malta|Cyprus)$/i.test(part)) {
+                country = part;
+                break;
+            }
+            // If no obvious country found, use the last non-numeric part as country
+            if (i === parts.length - 1 || (i === parts.length - 2 && /^\d+$/.test(parts[parts.length - 1]))) {
+                country = part;
+                break;
+            }
+        }
+    }
+    
+    // If we found a country and it's different from the city, return "City, Country"
+    if (country && country !== city) {
+        return `${city}, ${country}`;
+    }
+    
+    // If no country found or country is same as city, return just the city
+    return city;
+};
+
 // ------------------------- IMPROVED DESCRIPTION CLEANER (DOM-based) -------------------------
 const cleanDescription = (html) => {
     if (!html) return { html: '', text: '' };
@@ -168,37 +210,6 @@ const cleanDescription = (html) => {
     });
 
     return { html: cleanedHtml.trim(), text: lines.join('\n\n').trim() };
-};
-
-// Normalize location strings.
-// If the location starts with numeric (postal code) and contains a country
-// (comma-separated), return a compact form: "<FirstLetter>, <Country>".
-// Otherwise return the cleaned location unchanged.
-const formatLocation = (raw) => {
-    if (!raw) return 'N/A';
-
-    // Remove brackets/newlines and trim
-    let s = raw.replace(/[\[\]\r\n]/g, '').trim();
-
-    // Split by commas and trim parts
-    const parts = s.split(',').map(p => p.trim()).filter(Boolean);
-
-    if (parts.length >= 2) {
-        const first = parts[0];
-        const last = parts[parts.length - 1];
-
-        // If first part starts with a digit, pick first alphabetical character
-        // from the whole string (usually the start of the address) and use
-        // last part as country.
-        if (/^\d/.test(first)) {
-            const alphaMatch = s.match(/[A-Za-zÀ-ÖØ-öø-ÿ]/);
-            const firstLetter = alphaMatch ? alphaMatch[0].toUpperCase() : '';
-            return firstLetter ? `${firstLetter}, ${last}` : `${last}`;
-        }
-    }
-
-    // Otherwise keep the cleaned text (remove excessive whitespace)
-    return s.replace(/\s+/g, ' ');
 };
 
 // ------------------------- START URLS -------------------------
@@ -359,10 +370,9 @@ const crawler = new CheerioCrawler({
                     }
                     
                     let location = 'N/A';
-                    const locationMatch = containerText.match(/Job in\s+([^,\n\[]+(?:,\s*[^,\n\]]+)?|\[[^\]]+\])/);
+                    const locationMatch = containerText.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
                     if (locationMatch) {
-                        const rawLoc = cleanText(locationMatch[1]);
-                        location = formatLocation(rawLoc);
+                        location = cleanText(locationMatch[1]);
                     }
                     
                     let date_posted = null;
@@ -396,44 +406,34 @@ const crawler = new CheerioCrawler({
                 let nextUrl = null;
                 
                 try {
-                    // Prefer rel="next"
-                    const relNext = $('a[rel="next"]').attr('href') || $('link[rel="next"]').attr('href');
-                    if (relNext) {
-                        nextUrl = toAbs(relNext);
-                        crawlerLog.info(`Found rel=next -> ${nextUrl}`);
-                    }
-
-                    // Try common "Next" text/attributes if rel next not present
-                    if (!nextUrl) {
-                        const link = $('a').filter((_, a) => {
-                            const t = $(a).text().trim().toLowerCase();
-                            const title = ($(a).attr('title') || '').toLowerCase();
-                            return t === 'next' || t === '>' || title.includes('next');
-                        }).first().attr('href');
-
+                    // Method 1: Look for actual "Next" links on the page
+                    const nextSelectors = [
+                        'a:contains("Next")', 'a:contains("next")', 'a:contains(">")',
+                        'a[title*="Next"]', 'a[title*="next"]', '.next a',
+                        '.pagination a:last', 'a[href*="page"]'
+                    ];
+                    
+                    for (const selector of nextSelectors) {
+                        const link = $(selector).attr('href');
                         if (link && !link.includes('javascript')) {
                             nextUrl = toAbs(link);
-                            crawlerLog.info(`Found next via link text/title -> ${nextUrl}`);
+                            crawlerLog.info(`Found next page with selector: ${selector} -> ${nextUrl}`);
+                            break;
                         }
                     }
-
-                    // Try numeric pagination links (find current active page then next sibling)
-                    if (!nextUrl) {
-                        const active = $('.pagination .active, .pagination li.active').first();
-                        if (active && active.length > 0) {
-                            const nextLi = active.next('li').find('a').attr('href');
-                            if (nextLi) nextUrl = toAbs(nextLi);
-                        }
-                    }
-
-                    // Fallback: increment common query params
+                    
+                    // Method 2: Try different parameter patterns if no next link found
                     if (!nextUrl) {
                         const currentUrl = new URL(request.url);
-                        const patterns = ['page_number', 'page', 'p', 'start', 'offset'];
+                        
+                        // Try different pagination parameter patterns
+                        const patterns = [
+                            'page_number', 'page', 'p', 'start', 'offset'
+                        ];
+                        
                         for (const param of patterns) {
-                            const currentVal = currentUrl.searchParams.get(param);
-                            const currentPage = parseInt(currentVal || '1');
-                            if (!Number.isNaN(currentPage) && currentPage < 500) {
+                            const currentPage = parseInt(currentUrl.searchParams.get(param) || '1');
+                            if (currentPage < 50) { // Safety limit
                                 const testUrl = new URL(currentUrl);
                                 testUrl.searchParams.set(param, (currentPage + 1).toString());
                                 nextUrl = testUrl.href;
@@ -442,36 +442,26 @@ const crawler = new CheerioCrawler({
                             }
                         }
                     }
-
-                    // If still not found, try to detect total results and compute offsets (some searches limit 20 per page)
-                    if (!nextUrl) {
-                        const resultsText = $('body').text().match(/(\d+[\,\d]*)\s+results|Found\s+(\d+[\,\d]*)\s+jobs/i);
-                        const total = resultsText ? parseInt((resultsText[1] || resultsText[2] || '').replace(/,/g, '')) : NaN;
-                        if (!Number.isNaN(total) && total > 20) {
-                            const perPage = 20;
-                            const currentOffsetMatch = request.url.match(/(?:offset|start)=(\d+)/i);
-                            const currentOffset = currentOffsetMatch ? parseInt(currentOffsetMatch[1]) : (pagesVisited - 1) * perPage;
-                            const nextOffset = currentOffset + perPage;
-                            if (nextOffset < total) {
-                                const u = new URL(request.url);
-                                if (u.searchParams.has('offset') || u.searchParams.has('start')) {
-                                    if (u.searchParams.has('offset')) u.searchParams.set('offset', String(nextOffset));
-                                    if (u.searchParams.has('start')) u.searchParams.set('start', String(nextOffset));
-                                } else {
-                                    u.searchParams.set('offset', String(nextOffset));
-                                }
-                                nextUrl = u.href;
-                                crawlerLog.info(`Constructed offset-based next page: ${nextUrl}`);
-                            }
+                    
+                    // Method 3: If still no URL and it's the first few pages, try appending page number
+                    if (!nextUrl && pagesVisited <= 5) {
+                        const baseUrl = request.url.split('?')[0];
+                        if (!baseUrl.includes('page')) {
+                            nextUrl = `${baseUrl}?page=${pagesVisited + 1}`;
+                            crawlerLog.info(`Constructed simple page URL: ${nextUrl}`);
                         }
                     }
-
+                    
                     if (nextUrl) {
-                        await enqueueLinks({ urls: [nextUrl], userData: { label: 'LIST' } });
+                        await enqueueLinks({
+                            urls: [nextUrl],
+                            userData: { label: 'LIST' },
+                        });
                         crawlerLog.info(`Enqueued next page (${pagesVisited + 1}): ${nextUrl}`);
                     } else {
                         crawlerLog.info('No more pages to try - ending pagination');
                     }
+                    
                 } catch (e) {
                     crawlerLog.warning(`Pagination error: ${e.message}`);
                 }
@@ -490,9 +480,6 @@ const crawler = new CheerioCrawler({
 
             crawlerLog.info(`Processing detail: ${request.url}`);
 
-            // Cache full page body text once for fast regex-based extraction
-            const bodyText = $('body').text();
-
             // Extract job title
             let title = cleanText($('h1').first().text());
             if (title === 'N/A') {
@@ -501,19 +488,33 @@ const crawler = new CheerioCrawler({
 
             // Extract company
             let company = 'N/A';
-            const compMatch = bodyText.match(/Listing for:\s*([^\n]+)/);
-            if (compMatch) company = cleanText(compMatch[1]);
-
-            // Extract location (robust against postal codes like [07006, Spain])
-            let location = 'N/A';
-                const locMatch = bodyText.match(/Job in\s+([^,\n\[]+(?:,\s*[^,\n\]]+)?|\[[^\]]+\])/);
-                if (locMatch) {
-                    const rawLoc = cleanText(locMatch[1]);
-                    location = formatLocation(rawLoc);
+            $('*').each((_, el) => {
+                const text = $(el).text();
+                if (text.includes('Listing for:')) {
+                    const match = text.match(/Listing for:\s*([^\n]+)/);
+                    if (match) {
+                        company = cleanText(match[1]);
+                        return false;
+                    }
                 }
+            });
+
+            // Extract location
+            let location = 'N/A';
+            $('*').each((_, el) => {
+                const text = $(el).text();
+                if (text.includes('Job in')) {
+                    const match = text.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
+                    if (match) {
+                        location = cleanText(match[1]);
+                        return false;
+                    }
+                }
+            });
 
             // Extract job type
             let job_type = undefined;
+            const bodyText = $('body').text();
             const typeMatch = bodyText.match(/\b(Full[\s-]?[Tt]ime|Part[\s-]?[Tt]ime|Contract|Temporary|Permanent|Freelance|Internship|Remote)\b/);
             if (typeMatch) {
                 job_type = cleanText(typeMatch[1]);
@@ -532,8 +533,16 @@ const crawler = new CheerioCrawler({
 
             // Extract date posted
             let date_posted = null;
-                const dateMatch = bodyText.match(/Listed on\s+(\d{4}-\d{2}-\d{2})/);
-                if (dateMatch) date_posted = dateMatch[1];
+            $('*').each((_, el) => {
+                const text = $(el).text();
+                if (text.includes('Listed on')) {
+                    const match = text.match(/Listed on\s+(\d{4}-\d{2}-\d{2})/);
+                    if (match) {
+                        date_posted = match[1];
+                        return false;
+                    }
+                }
+            });
 
             // Extract salary
             let salary = undefined;
