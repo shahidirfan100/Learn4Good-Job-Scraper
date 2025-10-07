@@ -396,27 +396,54 @@ const crawler = new CheerioCrawler({
                 }
             }
 
-            // Pagination - Only for search result pages, not direct URLs
+            // Pagination logic - handle both search results and category listing pages
             const currentUrl = new URL(request.url);
             const isSearchResultPage = currentUrl.searchParams.has('controller') && 
                                      currentUrl.searchParams.get('controller') === 'job_list' &&
                                      currentUrl.searchParams.has('action');
             
-            if (isSearchResultPage && jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES && jobLinks.length > 0) {
+            // Check if it's a category/location listing page that can have pagination
+            const isListingPage = request.url.includes('/jobs/') && !request.url.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?$/);
+            
+            // Pagination should happen for search results OR listing pages, but NOT individual job pages
+            const shouldPaginate = (isSearchResultPage || isListingPage) && 
+                                 jobsScraped < MAX_JOBS && 
+                                 pagesVisited < MAX_PAGES && 
+                                 jobLinks.length > 0;
+            
+            if (shouldPaginate) {
                 let nextUrl = null;
                 
                 try {
-                    // Learn4Good uses 'page_number' parameter for pagination
-                    const currentPage = parseInt(currentUrl.searchParams.get('page_number') || '1');
+                    if (isSearchResultPage) {
+                        // Search results use 'page_number' parameter
+                        const currentPage = parseInt(currentUrl.searchParams.get('page_number') || '1');
+                        
+                        if (currentPage < 100) { // Safety limit
+                            const nextPageUrl = new URL(currentUrl);
+                            nextPageUrl.searchParams.set('page_number', (currentPage + 1).toString());
+                            nextUrl = nextPageUrl.href;
+                            crawlerLog.info(`Search results - next page ${currentPage + 1}: ${nextUrl}`);
+                        }
+                    } else if (isListingPage) {
+                        // Category/location listing pages might use different pagination patterns
+                        // Try common pagination patterns
+                        let baseUrl = request.url.replace(/\/page\/\d+\/?$/, '').replace(/\/$/, '');
+                        
+                        // Extract current page from URL or assume page 1
+                        let currentPage = 1;
+                        const pageMatch = request.url.match(/\/page\/(\d+)/);
+                        if (pageMatch) {
+                            currentPage = parseInt(pageMatch[1]);
+                        }
+                        
+                        if (currentPage < 100) { // Safety limit
+                            nextUrl = `${baseUrl}/page/${currentPage + 1}/`;
+                            crawlerLog.info(`Listing page - next page ${currentPage + 1}: ${nextUrl}`);
+                        }
+                    }
                     
-                    // Construct next page URL by incrementing page_number
-                    if (currentPage < 100) { // Safety limit to prevent infinite loops
-                        const nextPageUrl = new URL(currentUrl);
-                        nextPageUrl.searchParams.set('page_number', (currentPage + 1).toString());
-                        nextUrl = nextPageUrl.href;
-                        
-                        crawlerLog.info(`Constructed next page URL (page ${currentPage + 1}): ${nextUrl}`);
-                        
+                    if (nextUrl) {
                         await enqueueLinks({
                             urls: [nextUrl],
                             userData: { label: 'LIST' },
@@ -429,10 +456,10 @@ const crawler = new CheerioCrawler({
                 } catch (e) {
                     crawlerLog.warning(`Pagination error: ${e.message}`);
                 }
-            } else if (isSearchResultPage && jobLinks.length === 0) {
-                crawlerLog.info('No job links found on search results page - likely reached end of results');
-            } else if (!isSearchResultPage) {
-                crawlerLog.info('Direct URL detected - no pagination needed, processing individual job links');
+            } else if ((isSearchResultPage || isListingPage) && jobLinks.length === 0) {
+                crawlerLog.info('No job links found on this page - likely reached end of results');
+            } else if (!isSearchResultPage && !isListingPage) {
+                crawlerLog.info('Individual job page detected - no pagination needed');
             } else if (pagesVisited >= MAX_PAGES) {
                 crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping.`);
             } else if (jobsScraped >= MAX_JOBS) {
