@@ -98,71 +98,76 @@ const cleanText = (text) => {
         .trim() || 'N/A';
 };
 
-const formatLocation = (locationString) => {
-    if (!locationString || locationString === 'N/A') return 'N/A';
-    
-    // Split the location by commas and clean each part
-    const parts = locationString.split(',').map(part => part.trim()).filter(part => part);
-    
-    if (parts.length === 0) return 'N/A';
-    
-    // Find the city (first non-numeric part)
-    let city = null;
-    for (let i = 0; i < parts.length; i++) {
-        const part = parts[i];
-        // Skip purely numeric parts (like zip codes: "07006", "48255")
-        if (!/^\d+$/.test(part)) {
-            city = part;
-            break;
-        }
-    }
-    
-    // If no city found, fallback to first part
-    if (!city) {
-        city = parts[0];
-    }
-    
-    // Find the country (usually the last non-numeric part)
-    let country = null;
-    
-    // Look for common country patterns (USA, United States, etc.)
-    for (let i = parts.length - 1; i >= 0; i--) {
-        const part = parts[i];
-        // Skip numeric parts (like zip codes)
-        if (!/^\d+$/.test(part)) {
-            // Check if it looks like a country
-            if (/^(USA|US|United States|America|UK|United Kingdom|Canada|Australia|Germany|France|Italy|Spain|Netherlands|Belgium|Switzerland|Austria|Denmark|Sweden|Norway|Finland|Ireland|Poland|Czech Republic|Hungary|Romania|Bulgaria|Croatia|Slovenia|Slovakia|Estonia|Latvia|Lithuania|Greece|Portugal|Luxembourg|Malta|Cyprus)$/i.test(part)) {
-                country = part;
-                break;
-            }
-            // If no obvious country found, use the last non-numeric part as country
-            if (i === parts.length - 1 || (i === parts.length - 2 && /^\d+$/.test(parts[parts.length - 1]))) {
-                country = part;
-                break;
-            }
-        }
-    }
-    
-    // If we found a country and it's different from the city, return "City, Country"
-    if (country && country !== city) {
-        return `${city}, ${country}`;
-    }
-    
-    // If no country found or country is same as city, return just the city
-    return city;
-};
-
 // ------------------------- IMPROVED DESCRIPTION CLEANER (DOM-based) -------------------------
 const cleanDescription = (html) => {
     if (!html) return { html: '', text: '' };
-    
-    // Simple cleaning - just extract clean text from HTML
-    const cleanedText = htmlToText(html);
-    
-    return {
-        html: html,
-        text: cleanedText,
-    };
+
+    const $ = cheerio.load(html);
+
+    // Remove specific Learn4Good navigation and metadata elements
+    const removeSelectors = [
+        'script', 'style', 'nav', 'header', 'footer', 'form', 'iframe',
+        'noscript', 'svg', 'canvas', 'button', 'input', 'select', 'option', 'label',
+        // Learn4Good specific elements
+        '#top_section', '#mob_ad_container', '.path', '.no_heading_path',
+        '#info_div', '.ll', '#by_line', '.bottom_main_info',
+        '[id*="ad"]', '[class*="ad"]', '[class*="banner"]',
+        // Generic cleanup
+        '.cookie', '#cookie', '[id*="cookie"]', '[class*="cookie"]',
+        '.ads', '.advertisement', '.banner', '.social', '.share', '.share-buttons',
+        '.search', '.filter', '.job-search', '.cv-search', '.navigation', '.menu',
+        '.sidebar', '.related-jobs', '.similar-jobs', '.breadcrumb',
+        // Metadata elements
+        'meta', '[itemprop]', '[itemscope]', '[itemtype]'
+    ];
+    $(removeSelectors.join(',')).remove();
+
+    // Remove elements with too many links (navigation)
+    $('div, section, article').each((_, el) => {
+        const $el = $(el);
+        const linkCount = $el.find('a').length;
+        const textLength = $el.text().trim().length;
+        
+        // If more than 50% links, it's probably navigation
+        if (linkCount > 5 && linkCount > textLength / 20) {
+            $el.remove();
+        }
+    });
+
+    // Remove superfluous tiny elements
+    $('div, section, aside, article, span, li, p').each((_, el) => {
+        const txt = $(el).text().trim();
+        if (txt.length < 40 && $(el).children().length === 0) {
+            $(el).remove();
+        }
+    });
+
+    // Remove wrappers with too many attributes (widgets)
+    $('div, section, article').each((_, el) => {
+        const attrCount = Object.keys(el.attribs || {}).length;
+        if (attrCount > 10 && $(el).find('input,select,button,form').length > 0) {
+            $(el).remove();
+        }
+    });
+
+    const cleanedHtml = $('body').html() || '';
+    const text = htmlToText(cleanedHtml);
+
+    // Filter cookie/privacy/menu lines from text
+    const lines = text.split('\n').filter((line) => {
+        const lower = line.toLowerCase().trim();
+        return (
+            lower.length > 15 &&
+            !lower.includes('cookie') &&
+            !lower.includes('privacy policy') &&
+            !lower.includes('manage settings') &&
+            !lower.includes('accept & continue') &&
+            !lower.includes('opt-out') &&
+            !lower.match(/^(home|jobs|search|login|register|apply now|view|click|back to)$/i)
+        );
+    });
+
+    return { html: cleanedHtml.trim(), text: lines.join('\n\n').trim() };
 };
 
 // ------------------------- START URLS -------------------------
@@ -274,8 +279,8 @@ const crawler = new CheerioCrawler({
                 const href = $(el).attr('href');
                 if (!href) return;
                 
-                // Match job detail URLs - be more flexible with the pattern
-                if (href.match(/\/jobs\/.*\/\d+\/e\/?/) || href.includes('/jobs/') && href.includes('/e')) {
+                // Match job detail URLs
+                if (href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?/)) {
                     const fullUrl = toAbs(href);
                     if (fullUrl && !jobLinks.includes(fullUrl) && !processedUrls.has(fullUrl)) {
                         const linkText = cleanText($(el).text());
@@ -286,29 +291,11 @@ const crawler = new CheerioCrawler({
                     }
                 }
             });
-            
-            // Additional check for alternative job link patterns
-            $('a[href*="/jobs/"]').each((_, el) => {
-                const href = $(el).attr('href');
-                if (!href) return;
-                
-                const fullUrl = toAbs(href);
-                if (fullUrl && !jobLinks.includes(fullUrl) && !processedUrls.has(fullUrl) && 
-                    (href.includes('job-id') || href.includes('jobid') || /\/\d+\//.test(href))) {
-                    const linkText = cleanText($(el).text());
-                    if (linkText !== 'N/A' && linkText.length > 3) {
-                        jobLinks.push(fullUrl);
-                        processedUrls.add(fullUrl);
-                    }
-                }
-            });
 
-            crawlerLog.info(`Found ${jobLinks.length} new job links on page ${pagesVisited}. Total jobs scraped so far: ${jobsScraped}/${MAX_JOBS}`);
+            crawlerLog.info(`Found ${jobLinks.length} new job links on page ${pagesVisited}`);
 
             if (jobLinks.length === 0) {
-                crawlerLog.warning(`No jobs found on page ${pagesVisited}. May have reached end of results or been blocked.`);
-                crawlerLog.info(`Current URL: ${request.url}`);
-                crawlerLog.info(`Page content length: ${$('body').html()?.length || 0} characters`);
+                crawlerLog.warning('No jobs found. May have reached end of results or been blocked.');
                 // Don't stop immediately - try next page
             }
 
@@ -341,10 +328,9 @@ const crawler = new CheerioCrawler({
                     }
                     
                     let location = 'N/A';
-                    const locationMatch = containerText.match(/Job in\s+([^\n]+)/);
+                    const locationMatch = containerText.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
                     if (locationMatch) {
-                        const rawLocation = cleanText(locationMatch[1]);
-                        location = formatLocation(rawLocation);
+                        location = cleanText(locationMatch[1]);
                     }
                     
                     let date_posted = null;
@@ -394,32 +380,23 @@ const crawler = new CheerioCrawler({
                         }
                     }
                     
-                    // Method 2: Try Learn4Good's specific pagination parameter
+                    // Method 2: Try different parameter patterns if no next link found
                     if (!nextUrl) {
                         const currentUrl = new URL(request.url);
                         
-                        // Learn4Good uses 'page_number' parameter specifically
-                        const currentPage = parseInt(currentUrl.searchParams.get('page_number') || '1');
-                        if (currentPage < 100) { // Safety limit - increased for more pages
-                            const testUrl = new URL(currentUrl);
-                            testUrl.searchParams.set('page_number', (currentPage + 1).toString());
-                            nextUrl = testUrl.href;
-                            crawlerLog.info(`Constructed next page using page_number: ${nextUrl}`);
-                        }
+                        // Try different pagination parameter patterns
+                        const patterns = [
+                            'page_number', 'page', 'p', 'start', 'offset'
+                        ];
                         
-                        // Fallback: try other common patterns if page_number didn't work
-                        if (!nextUrl) {
-                            const patterns = ['page', 'p', 'start', 'offset'];
-                            
-                            for (const param of patterns) {
-                                const currentPage = parseInt(currentUrl.searchParams.get(param) || '1');
-                                if (currentPage < 50) { // Safety limit
-                                    const testUrl = new URL(currentUrl);
-                                    testUrl.searchParams.set(param, (currentPage + 1).toString());
-                                    nextUrl = testUrl.href;
-                                    crawlerLog.info(`Constructed next page using ${param}: ${nextUrl}`);
-                                    break;
-                                }
+                        for (const param of patterns) {
+                            const currentPage = parseInt(currentUrl.searchParams.get(param) || '1');
+                            if (currentPage < 50) { // Safety limit
+                                const testUrl = new URL(currentUrl);
+                                testUrl.searchParams.set(param, (currentPage + 1).toString());
+                                nextUrl = testUrl.href;
+                                crawlerLog.info(`Constructed next page using ${param}: ${nextUrl}`);
+                                break;
                             }
                         }
                     }
@@ -485,10 +462,9 @@ const crawler = new CheerioCrawler({
             $('*').each((_, el) => {
                 const text = $(el).text();
                 if (text.includes('Job in')) {
-                    const match = text.match(/Job in\s+([^\n]+)/);
+                    const match = text.match(/Job in\s+([^,\n]+(?:,\s*[^,\n]+)?)/);
                     if (match) {
-                        const rawLocation = cleanText(match[1]);
-                        location = formatLocation(rawLocation);
+                        location = cleanText(match[1]);
                         return false;
                     }
                 }
