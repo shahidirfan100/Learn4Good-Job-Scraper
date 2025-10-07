@@ -199,20 +199,6 @@ const cleanDescription = (html) => {
 // ------------------------- START URLS -------------------------
 const finalStartUrl = startUrl || buildStartUrl(keyword, location, posted_date);
 
-// Determine scraping method for logging and debugging
-let scrapingMethod = 'unknown';
-if (startUrl) {
-    if (startUrl.includes('/jobs/') && startUrl.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?$/)) {
-        scrapingMethod = 'single-job';
-    } else if (startUrl.includes('/jobs/')) {
-        scrapingMethod = 'category';
-    } else {
-        scrapingMethod = 'url';
-    }
-} else if (keyword || location) {
-    scrapingMethod = 'keyword';
-}
-
 // ------------------------- PROXY -------------------------
 const proxyConf = proxyConfiguration
     ? await Actor.createProxyConfiguration(proxyConfiguration)
@@ -221,6 +207,7 @@ const proxyConf = proxyConfiguration
 // ------------------------- SHARED STATE -------------------------
 let jobsScraped = 0;
 let pagesVisited = 0;
+const processedUrls = new Set();
 
 // ------------------------- CRAWLER -------------------------
 const crawler = new CheerioCrawler({
@@ -312,10 +299,22 @@ const crawler = new CheerioCrawler({
             crawlerLog.info(`Processing LIST page ${pagesVisited}/${MAX_PAGES}: ${request.url}`);
             
             const jobLinks = [];
-            $('a[href*="/jobs/"]').each((i, el) => {
+            
+            // Learn4Good wraps each job in a specific structure
+            $('a').each((_, el) => {
                 const href = $(el).attr('href');
-                if (href && href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?$/)) {
-                    jobLinks.push(href);
+                if (!href) return;
+                
+                // Match job detail URLs
+                if (href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?/)) {
+                    const fullUrl = toAbs(href);
+                    if (fullUrl && !jobLinks.includes(fullUrl) && !processedUrls.has(fullUrl)) {
+                        const linkText = cleanText($(el).text());
+                        if (linkText !== 'N/A' && linkText.length > 3) {
+                            jobLinks.push(fullUrl);
+                            processedUrls.add(fullUrl);
+                        }
+                    }
                 }
             });
 
@@ -326,20 +325,19 @@ const crawler = new CheerioCrawler({
                 // Don't stop immediately - try next page
             }
 
-            if (collectDetails && jobLinks.length > 0) {
-                // Queue job detail requests
-                for (const jobHref of jobLinks) {
-                    const absoluteUrl = toAbs(jobHref);
-                    await enqueueLinks({
-                        urls: [absoluteUrl],
-                        userData: { label: 'DETAIL' },
-                    });
-                }
-                crawlerLog.info(`Enqueued ${jobLinks.length} detail pages`);
+            const remainingSlots = MAX_JOBS - jobsScraped;
+            const linksToEnqueue = jobLinks.slice(0, Math.max(0, remainingSlots));
+
+            if (collectDetails && linksToEnqueue.length > 0) {
+                // (⬇️ removed the artificial 100ms per-link delay to speed things up)
+                await enqueueLinks({
+                    urls: linksToEnqueue,
+                    userData: { label: 'DETAIL' },
+                });
+                crawlerLog.info(`Enqueued ${linksToEnqueue.length} detail pages`);
             } else if (!collectDetails) {
                 // Extract basic data from listing page
-                for (const jobLink of jobLinks) {
-                    const absoluteUrl = toAbs(jobLink);
+                for (const jobLink of linksToEnqueue) {
                     const linkElement = $(`a[href*="${jobLink.split('/').slice(-3).join('/')}"]`).first();
                     
                     if (linkElement.length === 0) continue;
@@ -367,17 +365,6 @@ const crawler = new CheerioCrawler({
                         date_posted = dateMatch[1];
                     }
                     
-                    // Extract brief description from container with same cleaning logic
-                    let description_html = '';
-                    let description_text = '';
-                    
-                    const containerHtml = container.html() || '';
-                    if (containerHtml) {
-                        const cleaned = cleanDescription(containerHtml);
-                        description_html = cleaned.html;
-                        description_text = cleaned.text;
-                    }
-                    
                     const item = {
                         title,
                         company,
@@ -385,10 +372,9 @@ const crawler = new CheerioCrawler({
                         salary: undefined,
                         job_type: undefined,
                         date_posted,
-                        description_html,
-                        description_text,
-                        url: absoluteUrl,
-                        method: scrapingMethod,
+                        description_html: '',
+                        description_text: '',
+                        url: jobLink,
                     };
 
                     await Dataset.pushData(item);
@@ -399,17 +385,74 @@ const crawler = new CheerioCrawler({
                 }
             }
 
-            // Look for next page
-            if (pagesVisited < MAX_PAGES && jobsScraped < MAX_JOBS) {
-                const nextLink = $('a:contains("Next")').first();
-                if (nextLink.length) {
-                    const nextUrl = toAbs(nextLink.attr('href'));
-                    await enqueueLinks({
-                        urls: [nextUrl],
-                        userData: { label: 'LIST' },
-                    });
-                    crawlerLog.info(`Found next page: ${nextUrl}`);
+            // Pagination - Continue as long as we haven't hit limits
+            if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES) {
+                let nextUrl = null;
+                
+                try {
+                    // Method 1: Look for actual "Next" links on the page
+                    const nextSelectors = [
+                        'a:contains("Next")', 'a:contains("next")', 'a:contains(">")',
+                        'a[title*="Next"]', 'a[title*="next"]', '.next a',
+                        '.pagination a:last', 'a[href*="page"]'
+                    ];
+                    
+                    for (const selector of nextSelectors) {
+                        const link = $(selector).attr('href');
+                        if (link && !link.includes('javascript')) {
+                            nextUrl = toAbs(link);
+                            crawlerLog.info(`Found next page with selector: ${selector} -> ${nextUrl}`);
+                            break;
+                        }
+                    }
+                    
+                    // Method 2: Try different parameter patterns if no next link found
+                    if (!nextUrl) {
+                        const currentUrl = new URL(request.url);
+                        
+                        // Try different pagination parameter patterns
+                        const patterns = [
+                            'page_number', 'page', 'p', 'start', 'offset'
+                        ];
+                        
+                        for (const param of patterns) {
+                            const currentPage = parseInt(currentUrl.searchParams.get(param) || '1');
+                            if (currentPage < 50) { // Safety limit
+                                const testUrl = new URL(currentUrl);
+                                testUrl.searchParams.set(param, (currentPage + 1).toString());
+                                nextUrl = testUrl.href;
+                                crawlerLog.info(`Constructed next page using ${param}: ${nextUrl}`);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    // Method 3: If still no URL and it's the first few pages, try appending page number
+                    if (!nextUrl && pagesVisited <= 5) {
+                        const baseUrl = request.url.split('?')[0];
+                        if (!baseUrl.includes('page')) {
+                            nextUrl = `${baseUrl}?page=${pagesVisited + 1}`;
+                            crawlerLog.info(`Constructed simple page URL: ${nextUrl}`);
+                        }
+                    }
+                    
+                    if (nextUrl) {
+                        await enqueueLinks({
+                            urls: [nextUrl],
+                            userData: { label: 'LIST' },
+                        });
+                        crawlerLog.info(`Enqueued next page (${pagesVisited + 1}): ${nextUrl}`);
+                    } else {
+                        crawlerLog.info('No more pages to try - ending pagination');
+                    }
+                    
+                } catch (e) {
+                    crawlerLog.warning(`Pagination error: ${e.message}`);
                 }
+            } else if (pagesVisited >= MAX_PAGES) {
+                crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping.`);
+            } else if (jobsScraped >= MAX_JOBS) {
+                crawlerLog.info(`Reached job limit (${jobsScraped}/${MAX_JOBS}). Stopping.`);
             }
         }
 
@@ -578,7 +621,6 @@ const crawler = new CheerioCrawler({
                 description_html,
                 description_text,
                 url: request.url,
-                method: scrapingMethod,
             };
 
             await Dataset.pushData(item);
@@ -593,12 +635,11 @@ const crawler = new CheerioCrawler({
 });
 
 log.info('Starting Learn4Good scraper...');
-log.info(`Scraping Method: ${scrapingMethod}`);
 log.info(`Configuration: MAX_JOBS=${MAX_JOBS}, MAX_PAGES=${MAX_PAGES}, collectDetails=${collectDetails}`);
 log.info(`Search params - keyword: ${keyword || 'N/A'}, location: ${location || 'N/A'}, posted_date: ${posted_date}`);
 log.info(`Final Start URL: ${finalStartUrl}`);
 
 await crawler.run([finalStartUrl]);
-log.info(`✓ Scraping completed using ${scrapingMethod} method. Jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
+log.info(`✓ Scraping completed. Jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
 
 await Actor.exit();
