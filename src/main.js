@@ -106,12 +106,24 @@ const formatLocation = (locationString) => {
     
     if (parts.length === 0) return 'N/A';
     
-    // For locations like "Detroit, Wayne County, Michigan, 48255, USA"
-    // We want to return "Detroit, USA"
+    // Find the city (first non-numeric part)
+    let city = null;
+    for (let i = 0; i < parts.length; i++) {
+        const part = parts[i];
+        // Skip purely numeric parts (like zip codes: "07006", "48255")
+        if (!/^\d+$/.test(part)) {
+            city = part;
+            break;
+        }
+    }
+    
+    // If no city found, fallback to first part
+    if (!city) {
+        city = parts[0];
+    }
     
     // Find the country (usually the last non-numeric part)
     let country = null;
-    let city = parts[0]; // First part is usually the city
     
     // Look for common country patterns (USA, United States, etc.)
     for (let i = parts.length - 1; i >= 0; i--) {
@@ -321,23 +333,43 @@ const crawler = new CheerioCrawler({
                 const href = $(el).attr('href');
                 if (!href) return;
                 
-                // Match job detail URLs
-                if (href.match(/\/jobs\/[^\/]+\/[^\/]+\/[^\/]+\/\d+\/e\/?/)) {
+                // Match job detail URLs - be more flexible with the pattern
+                if (href.match(/\/jobs\/.*\/\d+\/e\/?/) || href.includes('/jobs/') && href.includes('/e')) {
                     const fullUrl = toAbs(href);
                     if (fullUrl && !jobLinks.includes(fullUrl) && !processedUrls.has(fullUrl)) {
                         const linkText = cleanText($(el).text());
                         if (linkText !== 'N/A' && linkText.length > 3) {
                             jobLinks.push(fullUrl);
                             processedUrls.add(fullUrl);
+                            crawlerLog.debug(`Found job link: ${fullUrl} - "${linkText}"`);
                         }
                     }
                 }
             });
+            
+            // Additional check for alternative job link patterns
+            $('a[href*="/jobs/"]').each((_, el) => {
+                const href = $(el).attr('href');
+                if (!href) return;
+                
+                const fullUrl = toAbs(href);
+                if (fullUrl && !jobLinks.includes(fullUrl) && !processedUrls.has(fullUrl) && 
+                    (href.includes('job-id') || href.includes('jobid') || /\/\d+\//.test(href))) {
+                    const linkText = cleanText($(el).text());
+                    if (linkText !== 'N/A' && linkText.length > 3) {
+                        jobLinks.push(fullUrl);
+                        processedUrls.add(fullUrl);
+                        crawlerLog.debug(`Found alternative job link: ${fullUrl} - "${linkText}"`);
+                    }
+                }
+            });
 
-            crawlerLog.info(`Found ${jobLinks.length} new job links on page ${pagesVisited}`);
+            crawlerLog.info(`Found ${jobLinks.length} new job links on page ${pagesVisited}. Total jobs scraped so far: ${jobsScraped}/${MAX_JOBS}`);
 
             if (jobLinks.length === 0) {
-                crawlerLog.warning('No jobs found. May have reached end of results or been blocked.');
+                crawlerLog.warning(`No jobs found on page ${pagesVisited}. May have reached end of results or been blocked.`);
+                crawlerLog.info(`Current URL: ${request.url}`);
+                crawlerLog.info(`Page content length: ${$('body').html()?.length || 0} characters`);
                 // Don't stop immediately - try next page
             }
 
@@ -423,23 +455,32 @@ const crawler = new CheerioCrawler({
                         }
                     }
                     
-                    // Method 2: Try different parameter patterns if no next link found
+                    // Method 2: Try Learn4Good's specific pagination parameter
                     if (!nextUrl) {
                         const currentUrl = new URL(request.url);
                         
-                        // Try different pagination parameter patterns
-                        const patterns = [
-                            'page_number', 'page', 'p', 'start', 'offset'
-                        ];
+                        // Learn4Good uses 'page_number' parameter specifically
+                        const currentPage = parseInt(currentUrl.searchParams.get('page_number') || '1');
+                        if (currentPage < 100) { // Safety limit - increased for more pages
+                            const testUrl = new URL(currentUrl);
+                            testUrl.searchParams.set('page_number', (currentPage + 1).toString());
+                            nextUrl = testUrl.href;
+                            crawlerLog.info(`Constructed next page using page_number: ${nextUrl}`);
+                        }
                         
-                        for (const param of patterns) {
-                            const currentPage = parseInt(currentUrl.searchParams.get(param) || '1');
-                            if (currentPage < 50) { // Safety limit
-                                const testUrl = new URL(currentUrl);
-                                testUrl.searchParams.set(param, (currentPage + 1).toString());
-                                nextUrl = testUrl.href;
-                                crawlerLog.info(`Constructed next page using ${param}: ${nextUrl}`);
-                                break;
+                        // Fallback: try other common patterns if page_number didn't work
+                        if (!nextUrl) {
+                            const patterns = ['page', 'p', 'start', 'offset'];
+                            
+                            for (const param of patterns) {
+                                const currentPage = parseInt(currentUrl.searchParams.get(param) || '1');
+                                if (currentPage < 50) { // Safety limit
+                                    const testUrl = new URL(currentUrl);
+                                    testUrl.searchParams.set(param, (currentPage + 1).toString());
+                                    nextUrl = testUrl.href;
+                                    crawlerLog.info(`Constructed next page using ${param}: ${nextUrl}`);
+                                    break;
+                                }
                             }
                         }
                     }
