@@ -155,73 +155,14 @@ const formatLocation = (locationString) => {
 // ------------------------- IMPROVED DESCRIPTION CLEANER (DOM-based) -------------------------
 const cleanDescription = (html) => {
     if (!html) return { html: '', text: '' };
-
-    const $ = cheerio.load(html);
-
-    // Remove specific Learn4Good navigation and metadata elements
-    const removeSelectors = [
-        'script', 'style', 'nav', 'header', 'footer', 'form', 'iframe',
-        'noscript', 'svg', 'canvas', 'button', 'input', 'select', 'option', 'label',
-        // Learn4Good specific elements
-        '#top_section', '#mob_ad_container', '.path', '.no_heading_path',
-        '#info_div', '.ll', '#by_line', '.bottom_main_info',
-        '[id*="ad"]', '[class*="ad"]', '[class*="banner"]',
-        // Generic cleanup
-        '.cookie', '#cookie', '[id*="cookie"]', '[class*="cookie"]',
-        '.ads', '.advertisement', '.banner', '.social', '.share', '.share-buttons',
-        '.search', '.filter', '.job-search', '.cv-search', '.navigation', '.menu',
-        '.sidebar', '.related-jobs', '.similar-jobs', '.breadcrumb',
-        // Metadata elements
-        'meta', '[itemprop]', '[itemscope]', '[itemtype]'
-    ];
-    $(removeSelectors.join(',')).remove();
-
-    // Remove elements with too many links (navigation)
-    $('div, section, article').each((_, el) => {
-        const $el = $(el);
-        const linkCount = $el.find('a').length;
-        const textLength = $el.text().trim().length;
-        
-        // If more than 50% links, it's probably navigation
-        if (linkCount > 5 && linkCount > textLength / 20) {
-            $el.remove();
-        }
-    });
-
-    // Remove superfluous tiny elements
-    $('div, section, aside, article, span, li, p').each((_, el) => {
-        const txt = $(el).text().trim();
-        if (txt.length < 40 && $(el).children().length === 0) {
-            $(el).remove();
-        }
-    });
-
-    // Remove wrappers with too many attributes (widgets)
-    $('div, section, article').each((_, el) => {
-        const attrCount = Object.keys(el.attribs || {}).length;
-        if (attrCount > 10 && $(el).find('input,select,button,form').length > 0) {
-            $(el).remove();
-        }
-    });
-
-    const cleanedHtml = $('body').html() || '';
-    const text = htmlToText(cleanedHtml);
-
-    // Filter cookie/privacy/menu lines from text
-    const lines = text.split('\n').filter((line) => {
-        const lower = line.toLowerCase().trim();
-        return (
-            lower.length > 15 &&
-            !lower.includes('cookie') &&
-            !lower.includes('privacy policy') &&
-            !lower.includes('manage settings') &&
-            !lower.includes('accept & continue') &&
-            !lower.includes('opt-out') &&
-            !lower.match(/^(home|jobs|search|login|register|apply now|view|click|back to)$/i)
-        );
-    });
-
-    return { html: cleanedHtml.trim(), text: lines.join('\n\n').trim() };
+    
+    // Simple cleaning - just extract clean text from HTML
+    const cleanedText = htmlToText(html);
+    
+    return {
+        html: html,
+        text: cleanedText,
+    };
 };
 
 // ------------------------- START URLS -------------------------
@@ -341,7 +282,6 @@ const crawler = new CheerioCrawler({
                         if (linkText !== 'N/A' && linkText.length > 3) {
                             jobLinks.push(fullUrl);
                             processedUrls.add(fullUrl);
-                            crawlerLog.debug(`Found job link: ${fullUrl} - "${linkText}"`);
                         }
                     }
                 }
@@ -359,7 +299,6 @@ const crawler = new CheerioCrawler({
                     if (linkText !== 'N/A' && linkText.length > 3) {
                         jobLinks.push(fullUrl);
                         processedUrls.add(fullUrl);
-                        crawlerLog.debug(`Found alternative job link: ${fullUrl} - "${linkText}"`);
                     }
                 }
             });
