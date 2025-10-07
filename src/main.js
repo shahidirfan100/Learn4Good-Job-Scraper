@@ -338,7 +338,8 @@ const crawler = new CheerioCrawler({
                 crawlerLog.info(`Enqueued ${jobLinks.length} detail pages`);
             } else if (!collectDetails) {
                 // Extract basic data from listing page
-                for (const jobLink of linksToEnqueue) {
+                for (const jobLink of jobLinks) {
+                    const absoluteUrl = toAbs(jobLink);
                     const linkElement = $(`a[href*="${jobLink.split('/').slice(-3).join('/')}"]`).first();
                     
                     if (linkElement.length === 0) continue;
@@ -386,7 +387,7 @@ const crawler = new CheerioCrawler({
                         date_posted,
                         description_html,
                         description_text,
-                        url: jobLink,
+                        url: absoluteUrl,
                         method: scrapingMethod,
                     };
 
