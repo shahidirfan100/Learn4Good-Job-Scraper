@@ -19,8 +19,34 @@ const {
     proxyConfiguration,
 } = input;
 
-// Validate input
-if (!startUrl && !keyword) {
+// ------------------------- INPUT NORMALIZATION & VALIDATION -------------------------
+// Small helpers that normalize user input without changing downstream logic
+const toNonEmptyStrings = (value) => {
+    if (value == null) return [];
+    // If it's a single string, split to array of one
+    if (typeof value === 'string') {
+        const v = value.trim();
+        return v ? [v] : [];
+    }
+    // If it's an array, map/trim and filter
+    if (Array.isArray(value)) {
+        return value
+            .filter((it) => it != null)
+            .map((it) => String(it).trim())
+            .filter((it) => it.length > 0);
+    }
+    // Other types are ignored
+    return [];
+};
+
+const hasUseful = (arr) => Array.isArray(arr) && arr.length > 0;
+
+// Prefer explicit singular keys, fall back to plural keys
+const startUrls = toNonEmptyStrings(input.startUrl ?? input.startUrls ?? startUrl);
+const keywords = toNonEmptyStrings(input.keyword ?? input.keywords ?? keyword);
+
+// Only throw if both normalized lists are empty
+if (!hasUseful(startUrls) && !hasUseful(keywords)) {
     throw new Error('INPUT error: Either "startUrl" or "keyword" field is required.');
 }
 
