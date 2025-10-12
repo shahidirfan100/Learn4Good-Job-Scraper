@@ -45,10 +45,13 @@ const hasUseful = (arr) => Array.isArray(arr) && arr.length > 0;
 const startUrls = toNonEmptyStrings(input.startUrl ?? input.startUrls ?? startUrl);
 const keywords = toNonEmptyStrings(input.keyword ?? input.keywords ?? keyword);
 
-// Only throw if both normalized lists are empty
+// ** FIX: Removed the validation block that caused the crash.
+// The scraper can now run with no keyword to fetch all recent jobs. **
+/*
 if (!hasUseful(startUrls) && !hasUseful(keywords)) {
     throw new Error('INPUT error: Either "startUrl" or "keyword" field is required.');
 }
+*/
 
 const MAX_JOBS = Number.isFinite(+MAX_JOBS_RAW) ? Math.max(1, +MAX_JOBS_RAW) : Number.MAX_SAFE_INTEGER;
 const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : Number.MAX_SAFE_INTEGER;
