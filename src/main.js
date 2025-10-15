@@ -9,12 +9,12 @@ await Actor.init();
 const input = await Actor.getInput() ?? {};
 const {
     startUrl = '',
-    keyword = '',
+    keyword = 'nurse',  // Default keyword for empty input
     location = '',
     posted_date = 'anytime',
     collectDetails = true,
-    maxJobs: MAX_JOBS_RAW,
-    maxPages: MAX_PAGES_RAW,
+    maxJobs: MAX_JOBS_RAW = 50,  // Default max jobs
+    maxPages: MAX_PAGES_RAW = 5,  // Default max pages
     cookies = '',
     proxyConfiguration,
 } = input;
