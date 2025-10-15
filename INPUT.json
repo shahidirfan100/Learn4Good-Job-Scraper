@@ -1,0 +1,8 @@
+{
+  "keyword": "nurse",
+  "location": "New York",
+  "posted_date": "anytime",
+  "collectDetails": true,
+  "maxJobs": 50,
+  "maxPages": 5
+}

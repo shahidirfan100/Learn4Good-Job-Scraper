@@ -8,19 +8,22 @@
       "title": "Start URL",
       "type": "string",
       "description": "A Learn4Good search URL to start scraping from. If provided, this will override the Keyword and Location fields.",
-      "editor": "textfield"
+      "editor": "textfield",
+      "prefill": ""
     },
     "keyword": {
       "title": "Keyword",
       "type": "string",
       "description": "Search term(s) for jobs (used if Start URL is not provided).",
-      "editor": "textfield"
+      "editor": "textfield",
+      "prefill": "nurse"
     },
     "location": {
       "title": "Location",
       "type": "string",
       "description": "Optional location filter (used if Start URL is not provided).",
-      "editor": "textfield"
+      "editor": "textfield",
+      "prefill": "New York"
     },
     "posted_date": {
       "title": "Posted Date",
@@ -32,34 +35,40 @@
         "30d",
         "anytime"
       ],
-      "editor": "select"
+      "editor": "select",
+      "default": "anytime",
+      "prefill": "anytime"
     },
     "collectDetails": {
       "title": "Collect job details",
       "type": "boolean",
       "description": "If enabled, the scraper also opens each job detail page to capture the full description (slower, but richer data).",
       "default": true,
-      "editor": "checkbox"
+      "editor": "checkbox",
+      "prefill": true
     },
     "maxJobs": {
       "title": "Max jobs",
       "type": "integer",
       "description": "Maximum number of jobs to collect. Leave empty to collect all available.",
       "minimum": 1,
-      "editor": "number"
+      "editor": "number",
+      "prefill": 50
     },
     "maxPages": {
       "title": "Max pages",
       "type": "integer",
       "description": "Safety cap on how many listing pages to visit. Leave empty for no cap (the actor still stops at Max jobs).",
       "minimum": 1,
-      "editor": "number"
+      "editor": "number",
+      "prefill": 5
     },
     "cookies": {
       "title": "Custom cookies (raw header)",
       "type": "string",
       "description": "Optional raw Cookie header string (e.g., \"pref_exp=; OptanonConsent=...\").",
-      "editor": "textfield"
+      "editor": "textfield",
+      "prefill": ""
     },
     "proxyConfiguration": {
       "title": "Proxy configuration",

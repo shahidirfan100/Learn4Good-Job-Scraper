@@ -224,7 +224,10 @@ const cleanDescription = (html) => {
 };
 
 // ------------------------- START URLS -------------------------
-const finalStartUrl = startUrl || buildStartUrl(keyword, location, posted_date);
+// Use normalized values: pick first startUrl if available, else build from first keyword
+const finalStartUrl = hasUseful(startUrls) 
+    ? startUrls[0] 
+    : buildStartUrl(keywords[0] || '', location, posted_date);
 
 // ------------------------- PROXY -------------------------
 const proxyConf = proxyConfiguration
@@ -663,7 +666,7 @@ const crawler = new CheerioCrawler({
 
 log.info('Starting Learn4Good scraper...');
 log.info(`Configuration: MAX_JOBS=${MAX_JOBS}, MAX_PAGES=${MAX_PAGES}, collectDetails=${collectDetails}`);
-log.info(`Search params - keyword: ${keyword || 'N/A'}, location: ${location || 'N/A'}, posted_date: ${posted_date}`);
+log.info(`Search params - keyword: ${keywords[0] || 'N/A'}, location: ${location || 'N/A'}, posted_date: ${posted_date}`);
 log.info(`Final Start URL: ${finalStartUrl}`);
 
 await crawler.run([finalStartUrl]);
