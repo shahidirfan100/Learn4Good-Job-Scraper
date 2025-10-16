@@ -241,6 +241,7 @@ const proxyConf = proxyConfiguration
 
 // ------------------------- SHARED STATE -------------------------
 let jobsScraped = 0;
+let jobsEnqueued = 0;  // Track how many job detail pages we've enqueued
 let pagesVisited = 0;
 const processedUrls = new Set();
 
@@ -360,10 +361,13 @@ const crawler = new CheerioCrawler({
                 // Don't stop immediately - try next page
             }
 
-            const remainingSlots = MAX_JOBS - jobsScraped;
+            // When collectDetails is true, use jobsEnqueued to decide how many more to enqueue
+            // When collectDetails is false, use jobsScraped (since we scrape immediately on LIST page)
+            const currentCount = collectDetails ? jobsEnqueued : jobsScraped;
+            const remainingSlots = MAX_JOBS - currentCount;
             const linksToEnqueue = jobLinks.slice(0, Math.max(0, remainingSlots));
 
-            crawlerLog.info(`[QUEUE] jobsScraped: ${jobsScraped}, MAX_JOBS: ${MAX_JOBS}, remainingSlots: ${remainingSlots}, will enqueue: ${linksToEnqueue.length}`);
+            crawlerLog.info(`[QUEUE] jobsScraped: ${jobsScraped}, jobsEnqueued: ${jobsEnqueued}, MAX_JOBS: ${MAX_JOBS}, remainingSlots: ${remainingSlots}, will enqueue: ${linksToEnqueue.length}`);
 
             if (collectDetails && linksToEnqueue.length > 0) {
                 // (⬇️ removed the artificial 100ms per-link delay to speed things up)
@@ -371,7 +375,8 @@ const crawler = new CheerioCrawler({
                     urls: linksToEnqueue,
                     userData: { label: 'DETAIL' },
                 });
-                crawlerLog.info(`Enqueued ${linksToEnqueue.length} detail pages`);
+                jobsEnqueued += linksToEnqueue.length;  // Track enqueued jobs
+                crawlerLog.info(`Enqueued ${linksToEnqueue.length} detail pages (total enqueued: ${jobsEnqueued})`);
             } else if (!collectDetails) {
                 // Extract basic data from listing page
                 for (const jobLink of linksToEnqueue) {
@@ -423,7 +428,9 @@ const crawler = new CheerioCrawler({
             }
 
             // Pagination - Continue as long as we haven't hit limits
-            if (jobsScraped < MAX_JOBS && pagesVisited < MAX_PAGES) {
+            // Use jobsEnqueued when collectDetails=true, jobsScraped when false
+            const jobCount = collectDetails ? jobsEnqueued : jobsScraped;
+            if (jobCount < MAX_JOBS && pagesVisited < MAX_PAGES) {
                 let nextUrl = null;
                 
                 try {
@@ -487,15 +494,16 @@ const crawler = new CheerioCrawler({
                     crawlerLog.warning(`Pagination error: ${e.message}`);
                 }
             } else if (pagesVisited >= MAX_PAGES) {
-                crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping.`);
-            } else if (jobsScraped >= MAX_JOBS) {
-                crawlerLog.info(`Reached job limit (${jobsScraped}/${MAX_JOBS}). Stopping.`);
+                crawlerLog.info(`Reached maximum pages limit (${MAX_PAGES}). Stopping pagination.`);
+            } else if (jobCount >= MAX_JOBS) {
+                crawlerLog.info(`Reached job limit (${jobCount}/${MAX_JOBS}). Stopping pagination.`);
             }
         }
 
         if (label === 'DETAIL') {
+            // Safety check - should rarely trigger now that we track jobsEnqueued properly
             if (jobsScraped >= MAX_JOBS) {
-                crawlerLog.info(`Skipping - limit reached: ${request.url}`);
+                crawlerLog.warning(`[SAFETY] Skipping detail page - limit already reached (${jobsScraped}/${MAX_JOBS}): ${request.url}`);
                 return;
             }
 
@@ -677,6 +685,6 @@ log.info(`Search params - keyword: ${keywords[0] || 'N/A'}, location: ${location
 log.info(`Final Start URL: ${finalStartUrl}`);
 
 await crawler.run([finalStartUrl]);
-log.info(`✓ Scraping completed. Jobs scraped: ${jobsScraped}, Pages visited: ${pagesVisited}`);
+log.info(`✓ Scraping completed. Jobs scraped: ${jobsScraped}, Jobs enqueued: ${jobsEnqueued}, Pages visited: ${pagesVisited}`);
 
 await Actor.exit();
