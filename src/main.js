@@ -13,8 +13,8 @@ const {
     location = '',
     posted_date = 'anytime',
     collectDetails = true,
-    maxJobs: MAX_JOBS_RAW = 50,  // Default max jobs
-    maxPages: MAX_PAGES_RAW = 5,  // Default max pages
+    maxJobs: MAX_JOBS_RAW = 50,  // Default max jobs (low for Apify QA tests)
+    maxPages: MAX_PAGES_RAW = 5,  // Default max pages (low for Apify QA tests)
     cookies = '',
     proxyConfiguration,
 } = input;
@@ -52,6 +52,11 @@ if (!hasUseful(startUrls) && !hasUseful(keywords)) {
 
 const MAX_JOBS = Number.isFinite(+MAX_JOBS_RAW) ? Math.max(1, +MAX_JOBS_RAW) : Number.MAX_SAFE_INTEGER;
 const MAX_PAGES = Number.isFinite(+MAX_PAGES_RAW) ? Math.max(1, +MAX_PAGES_RAW) : Number.MAX_SAFE_INTEGER;
+
+// Debug logging to verify input values
+log.info(`[DEBUG] Input received - maxJobs: ${input.maxJobs}, maxPages: ${input.maxPages}`);
+log.info(`[DEBUG] After destructuring - MAX_JOBS_RAW: ${MAX_JOBS_RAW}, MAX_PAGES_RAW: ${MAX_PAGES_RAW}`);
+log.info(`[DEBUG] Final values - MAX_JOBS: ${MAX_JOBS}, MAX_PAGES: ${MAX_PAGES}`);
 
 // ------------------------- HELPERS -------------------------
 const buildStartUrl = (kw, loc, date) => {
@@ -357,6 +362,8 @@ const crawler = new CheerioCrawler({
 
             const remainingSlots = MAX_JOBS - jobsScraped;
             const linksToEnqueue = jobLinks.slice(0, Math.max(0, remainingSlots));
+
+            crawlerLog.info(`[QUEUE] jobsScraped: ${jobsScraped}, MAX_JOBS: ${MAX_JOBS}, remainingSlots: ${remainingSlots}, will enqueue: ${linksToEnqueue.length}`);
 
             if (collectDetails && linksToEnqueue.length > 0) {
                 // (⬇️ removed the artificial 100ms per-link delay to speed things up)

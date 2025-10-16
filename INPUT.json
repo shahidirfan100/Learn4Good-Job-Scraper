@@ -3,6 +3,6 @@
   "location": "New York",
   "posted_date": "anytime",
   "collectDetails": true,
-  "maxJobs": 50,
-  "maxPages": 5
+  "maxJobs": 200,
+  "maxPages": 25
 }
