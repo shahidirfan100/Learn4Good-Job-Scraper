@@ -9,12 +9,12 @@ await Actor.init();
 const input = await Actor.getInput() ?? {};
 const {
     startUrl = '',
-    keyword = 'nurse',  // Default keyword for empty input
+    keyword = 'nurse',  // Default keyword for empty input (Apify QA)
     location = '',
     posted_date = 'anytime',
     collectDetails = true,
-    maxJobs: MAX_JOBS_RAW = 50,  // Default max jobs (low for Apify QA tests)
-    maxPages: MAX_PAGES_RAW = 5,  // Default max pages (low for Apify QA tests)
+    maxJobs: MAX_JOBS_RAW,  // No default - undefined means unlimited
+    maxPages: MAX_PAGES_RAW,  // No default - undefined means unlimited
     cookies = '',
     proxyConfiguration,
 } = input;
