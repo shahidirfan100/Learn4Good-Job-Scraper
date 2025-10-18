@@ -230,9 +230,23 @@ const finalStartUrl = hasUseful(startUrls)
     : buildStartUrl(keywords[0] || '', location, posted_date);
 
 // ------------------------- PROXY -------------------------
-const proxyConf = proxyConfiguration
-    ? await Actor.createProxyConfiguration(proxyConfiguration)
-    : undefined;
+// Ensure we always run behind Apify Proxy (datacenter) unless user overrides it
+const proxyOptions = (proxyConfiguration && Object.keys(proxyConfiguration).length > 0)
+    ? proxyConfiguration
+    : { useApifyProxy: true, groups: ['DATACENTER'] };
+
+let proxyConf;
+try {
+    proxyConf = await Actor.createProxyConfiguration(proxyOptions);
+} catch (err) {
+    // If the default datacenter group is not available on the current account, fall back to auto
+    if (!proxyConfiguration && proxyOptions.groups) {
+        log.warning(`Default proxy group unavailable (${err.message}). Falling back to Apify Proxy auto selection.`);
+        proxyConf = await Actor.createProxyConfiguration({ useApifyProxy: true });
+    } else {
+        throw err;
+    }
+}
 
 // ------------------------- SHARED STATE -------------------------
 let jobsScraped = 0;

@@ -73,7 +73,7 @@
     "proxyConfiguration": {
       "title": "Proxy configuration",
       "type": "object",
-      "description": "Use Apify Proxy (recommended). Consider Residential if you encounter blocks.",
+      "description": "Optional override. The actor uses Apify datacenter proxies by default; switch groups here if you need residential access.",
       "editor": "proxy"
     }
   },
