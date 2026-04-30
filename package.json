@@ -1,6 +1,6 @@
 {
-  "name": "learn4good-jobs-actor-lite",
-  "version": "1.0.0",
+  "name": "learn4good-jobs-actor",
+  "version": "1.0",
   "description": "Lightweight Learn4Good.com jobs scraper using Cheerio.",
   "type": "module",
   "scripts": {
