@@ -7,8 +7,8 @@ await Actor.init();
 const input = (await Actor.getInput()) ?? {};
 const {
     startUrl = '',
-    keyword = 'nurse',
-    location = 'New York',
+    keyword = '',
+    location = '',
     maxJobs: maxJobsRaw,
     cookies = '',
     proxyConfiguration,
@@ -16,6 +16,7 @@ const {
 
 const SITE_ORIGIN = 'https://www.learn4good.com';
 const LIST_LABEL = 'LIST';
+const DETAIL_LABEL = 'DETAIL';
 const INTERNAL_POSTED_DATE = 'anytime';
 const DATASET_FLUSH_SIZE = 50;
 
@@ -308,6 +309,8 @@ const getNextListUrl = ($, currentUrl) => {
 
 const startUrls = toNonEmptyStrings(input.startUrl ?? input.startUrls ?? startUrl);
 const keywords = toNonEmptyStrings(input.keyword ?? input.keywords ?? keyword);
+const locations = toNonEmptyStrings(input.location ?? input.locations ?? location);
+const isStartUrlMode = startUrls.length > 0;
 
 if (!startUrls.length && !keywords.length) {
     throw new Error('INPUT error: provide either `startUrl` or `keyword`.');
@@ -315,7 +318,9 @@ if (!startUrls.length && !keywords.length) {
 
 const maxJobs = Number.isFinite(+maxJobsRaw) ? Math.max(1, +maxJobsRaw) : 20;
 const hardSafetyMaxPages = Math.min(500, Math.max(30, Math.ceil(maxJobs / 2)));
-const finalStartUrl = startUrls[0] || buildStartUrl(keywords[0] || '', location, INTERNAL_POSTED_DATE);
+const activeKeyword = isStartUrlMode ? '' : (keywords[0] || '');
+const activeLocation = isStartUrlMode ? '' : (locations[0] || '');
+const finalStartUrl = startUrls[0] || buildStartUrl(activeKeyword, activeLocation, INTERNAL_POSTED_DATE);
 
 const proxyOptions =
     proxyConfiguration && Object.keys(proxyConfiguration).length > 0
@@ -336,11 +341,11 @@ try {
 
 let jobsScraped = 0;
 let pagesVisited = 0;
+let queuedDetailCount = 0;
 let duplicatesSkipped = 0;
 let detailFailures = 0;
 let cumulativeLinksFound = 0;
 
-const discoveredDetailRequests = [];
 const discoveredJobKeys = new Set();
 const seenListUrls = new Set();
 const seenRecordUrls = new Set();
@@ -372,9 +377,9 @@ const userAgents = [
 
 /**
  * Attach headers and optional cookies for each request.
- * @param {{ request: any, session?: any }} ctx
+ * @param {{ request: any }} ctx
  */
-const applyHeaders = ({ request, session }) => {
+const applyHeaders = ({ request }) => {
     request.headers = {
         ...commonHeaders,
         'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)],
@@ -383,8 +388,6 @@ const applyHeaders = ({ request, session }) => {
     if (cookies) {
         request.headers.Cookie = cookies;
     }
-
-    if (session) void session;
 };
 
 /**
@@ -400,102 +403,7 @@ const flushDataset = async (force = false) => {
     await Dataset.pushData(batch);
 };
 
-const listCrawler = new CheerioCrawler({
-    proxyConfiguration: proxyConf,
-    requestHandlerTimeoutSecs: 35,
-    navigationTimeoutSecs: 25,
-    minConcurrency: 1,
-    maxConcurrency: 6,
-    useSessionPool: true,
-    persistCookiesPerSession: true,
-    sessionPoolOptions: {
-        maxPoolSize: 12,
-        sessionOptions: {
-            maxUsageCount: 80,
-            maxErrorScore: 3,
-        },
-    },
-    maxRequestRetries: 3,
-    retryOnBlocked: true,
-    statusMessageLoggingInterval: 999999,
-    statisticsOptions: {
-        logIntervalSecs: 999999,
-    },
-
-    preNavigationHooks: [applyHeaders],
-
-    async requestHandler({ request, $, enqueueLinks, session }) {
-        if (isBlockedPage($)) {
-            if (session) session.retire();
-            throw new Error('Blocked page detected, retrying with a new session.');
-        }
-
-        pagesVisited++;
-        const localLinks = new Set();
-        let linksFoundOnPage = 0;
-
-        const anchorElements = $('a[href*="/jobs/"]').toArray();
-        for (const el of anchorElements) {
-            if (discoveredDetailRequests.length >= maxJobs) break;
-
-            const href = $(el).attr('href');
-            if (!href) continue;
-            if (!href.match(/\/jobs\/[^/]+\/[^/]+\/[^/]+\/\d+\/e\/?/)) continue;
-
-            const fullUrl = toAbs(href);
-            if (!fullUrl || localLinks.has(fullUrl)) continue;
-
-            localLinks.add(fullUrl);
-            linksFoundOnPage++;
-
-            const jobId = extractJobIdFromUrl(fullUrl);
-            const uniqueJobKey = jobId || fullUrl;
-            if (discoveredJobKeys.has(uniqueJobKey)) continue;
-
-            discoveredJobKeys.add(uniqueJobKey);
-            discoveredDetailRequests.push({
-                url: fullUrl,
-                userData: { jobId },
-                uniqueKey: `detail:${uniqueJobKey}`,
-            });
-        }
-
-        cumulativeLinksFound += linksFoundOnPage;
-
-        log.info(
-            `Page ${pagesVisited}: linksFound=${linksFoundOnPage}, discovered=${discoveredDetailRequests.length}, target=${maxJobs}`,
-        );
-
-        if (discoveredDetailRequests.length >= maxJobs || pagesVisited >= hardSafetyMaxPages) {
-            return;
-        }
-
-        const avgLinksPerPage = cumulativeLinksFound / Math.max(1, pagesVisited);
-        const autoTargetPages = Math.max(1, Math.ceil(maxJobs / Math.max(1, avgLinksPerPage)));
-        const autoMaxPages = Math.min(hardSafetyMaxPages, autoTargetPages + 10);
-        if (pagesVisited >= autoMaxPages) return;
-
-        const nextUrl = getNextListUrl($, request.url);
-        if (!nextUrl || seenListUrls.has(nextUrl)) return;
-
-        seenListUrls.add(nextUrl);
-        await enqueueLinks({
-            urls: [nextUrl],
-            userData: { label: LIST_LABEL },
-            forefront: true,
-            transformRequestFunction: (req) => {
-                req.uniqueKey = `list:${req.loadedUrl || req.url}`;
-                return req;
-            },
-        });
-    },
-
-    failedRequestHandler: async ({ request }, error) => {
-        log.warning(`List page failed after retries: ${request.url} | ${error.message}`);
-    },
-});
-
-const detailCrawler = new CheerioCrawler({
+const crawler = new CheerioCrawler({
     proxyConfiguration: proxyConf,
     requestHandlerTimeoutSecs: 60,
     navigationTimeoutSecs: 40,
@@ -519,13 +427,81 @@ const detailCrawler = new CheerioCrawler({
 
     preNavigationHooks: [applyHeaders],
 
-    async requestHandler({ request, $, session }) {
-        if (jobsScraped >= maxJobs) return;
+    async requestHandler({ request, $, addRequests, session }) {
+        const label = request.userData.label || LIST_LABEL;
 
         if (isBlockedPage($)) {
             if (session) session.retire();
             throw new Error('Blocked page detected, retrying with a new session.');
         }
+
+        if (label === LIST_LABEL) {
+            pagesVisited++;
+
+            const localLinks = new Set();
+            let linksFoundOnPage = 0;
+            const detailRequests = [];
+
+            const anchorElements = $('a[href*="/jobs/"]').toArray();
+            for (const el of anchorElements) {
+                if (queuedDetailCount + detailRequests.length >= maxJobs) break;
+
+                const href = $(el).attr('href');
+                if (!href) continue;
+                if (!href.match(/\/jobs\/[^/]+\/[^/]+\/[^/]+\/\d+\/e\/?/)) continue;
+
+                const fullUrl = toAbs(href);
+                if (!fullUrl || localLinks.has(fullUrl)) continue;
+
+                localLinks.add(fullUrl);
+                linksFoundOnPage++;
+
+                const jobId = extractJobIdFromUrl(fullUrl);
+                const uniqueJobKey = jobId || fullUrl;
+                if (discoveredJobKeys.has(uniqueJobKey)) continue;
+
+                discoveredJobKeys.add(uniqueJobKey);
+                detailRequests.push({
+                    url: fullUrl,
+                    userData: { label: DETAIL_LABEL, jobId },
+                    uniqueKey: `detail:${uniqueJobKey}`,
+                });
+            }
+
+            if (detailRequests.length) {
+                await addRequests(detailRequests);
+                queuedDetailCount += detailRequests.length;
+            }
+
+            cumulativeLinksFound += linksFoundOnPage;
+            log.info(
+                `Page ${pagesVisited}: linksFound=${linksFoundOnPage}, queuedDetails=${queuedDetailCount}, saved=${jobsScraped}, target=${maxJobs}`,
+            );
+
+            if (queuedDetailCount >= maxJobs || pagesVisited >= hardSafetyMaxPages) {
+                return;
+            }
+
+            const avgLinksPerPage = cumulativeLinksFound / Math.max(1, pagesVisited);
+            const autoTargetPages = Math.max(1, Math.ceil(maxJobs / Math.max(1, avgLinksPerPage)));
+            const autoMaxPages = Math.min(hardSafetyMaxPages, autoTargetPages + 10);
+            if (pagesVisited >= autoMaxPages) return;
+
+            const nextUrl = getNextListUrl($, request.url);
+            if (!nextUrl || seenListUrls.has(nextUrl)) return;
+
+            seenListUrls.add(nextUrl);
+            await addRequests([
+                {
+                    url: nextUrl,
+                    userData: { label: LIST_LABEL },
+                    uniqueKey: `list:${nextUrl}`,
+                },
+            ]);
+            return;
+        }
+
+        if (jobsScraped >= maxJobs) return;
 
         const pageTitle = $('title').text();
         const bodyText = $('body').text();
@@ -571,8 +547,8 @@ const detailCrawler = new CheerioCrawler({
             description_text: descriptionText,
             url: request.url,
             job_id: jobId,
-            search_keyword: keywords[0] || '',
-            search_location: cleanText(location),
+            search_keyword: activeKeyword,
+            search_location: activeLocation,
             source: 'learn4good',
             scraped_at: new Date().toISOString(),
         });
@@ -613,29 +589,24 @@ const detailCrawler = new CheerioCrawler({
     },
 
     failedRequestHandler: async ({ request }, error) => {
-        detailFailures++;
-        log.warning(`Detail page failed after retries: ${request.url} | ${error.message}`);
+        if (request.userData.label === DETAIL_LABEL) {
+            detailFailures++;
+        }
+
+        log.warning(`Request failed after retries [${request.userData.label || LIST_LABEL}]: ${request.url} | ${error.message}`);
     },
 });
 
 seenListUrls.add(finalStartUrl);
 
-log.info(`Starting run. maxJobs=${maxJobs}, autoPageLimit=${hardSafetyMaxPages}, phase=list`);
-await listCrawler.run([{ url: finalStartUrl, userData: { label: LIST_LABEL }, uniqueKey: `list:${finalStartUrl}` }]);
+log.info(
+    `Starting run. mode=${isStartUrlMode ? 'startUrl' : 'keyword'} maxJobs=${maxJobs}, autoPageLimit=${hardSafetyMaxPages}, keyword="${activeKeyword}", location="${activeLocation}"`,
+);
+await crawler.run([{ url: finalStartUrl, userData: { label: LIST_LABEL }, uniqueKey: `list:${finalStartUrl}` }]);
+await flushDataset(true);
 
-log.info(`List phase finished. pagesVisited=${pagesVisited}, discovered=${discoveredDetailRequests.length}`);
+log.info(
+    `Run finished. saved=${jobsScraped}, queuedDetails=${queuedDetailCount}, pagesVisited=${pagesVisited}, duplicatesSkipped=${duplicatesSkipped}, failures=${detailFailures}`,
+);
 
-if (!discoveredDetailRequests.length) {
-    log.warning('No job detail URLs discovered. Exiting without dataset writes.');
-    await Actor.exit();
-} else {
-    log.info(`Starting detail phase. requests=${discoveredDetailRequests.length}`);
-    await detailCrawler.run(discoveredDetailRequests);
-    await flushDataset(true);
-
-    log.info(
-        `Run finished. saved=${jobsScraped}, pagesVisited=${pagesVisited}, duplicatesSkipped=${duplicatesSkipped}, failures=${detailFailures}`,
-    );
-
-    await Actor.exit();
-}
+await Actor.exit();
