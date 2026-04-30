@@ -1,79 +1,43 @@
 {
   "title": "Learn4Good Jobs Scraper",
-  "description": "Scrape jobs from Learn4Good. You can provide either a search URL or keywords/location.",
+  "description": "Scrape jobs from Learn4Good using keyword/location search or a direct search URL.",
   "type": "object",
   "schemaVersion": 1,
   "properties": {
     "startUrl": {
       "title": "Start URL",
       "type": "string",
-      "description": "A Learn4Good search URL to start scraping from. If provided, this will override the Keyword and Location fields.",
+      "description": "Direct Learn4Good search URL. If provided, it overrides keyword and location.",
       "editor": "textfield",
       "prefill": ""
     },
     "keyword": {
       "title": "Keyword",
       "type": "string",
-      "description": "Search term(s) for jobs (used if Start URL is not provided).",
+      "description": "Search term(s) for jobs when Start URL is not provided.",
       "editor": "textfield",
       "prefill": "nurse"
     },
     "location": {
       "title": "Location",
       "type": "string",
-      "description": "Optional location filter (used if Start URL is not provided).",
+      "description": "Optional location filter when Start URL is not provided.",
       "editor": "textfield",
       "prefill": "New York"
-    },
-    "posted_date": {
-      "title": "Posted Date",
-      "type": "string",
-      "description": "Filter jobs by posted date.",
-      "enum": [
-        "24h",
-        "7d",
-        "30d",
-        "anytime"
-      ],
-      "editor": "select",
-      "default": "anytime",
-      "prefill": "anytime"
-    },
-    "collectDetails": {
-      "title": "Collect job details",
-      "type": "boolean",
-      "description": "If enabled, the scraper also opens each job detail page to capture the full description (slower, but richer data).",
-      "default": true,
-      "editor": "checkbox",
-      "prefill": true
     },
     "maxJobs": {
       "title": "Max jobs",
       "type": "integer",
-      "description": "Maximum number of jobs to collect. Leave empty to collect all available.",
+      "description": "Maximum number of jobs to collect.",
       "minimum": 1,
+      "default": 20,
       "editor": "number",
-      "prefill": 200
-    },
-    "maxPages": {
-      "title": "Max pages",
-      "type": "integer",
-      "description": "Safety cap on how many listing pages to visit. Leave empty for no cap (the actor still stops at Max jobs).",
-      "minimum": 1,
-      "editor": "number",
-      "prefill": 25
-    },
-    "cookies": {
-      "title": "Custom cookies (raw header)",
-      "type": "string",
-      "description": "Optional raw Cookie header string (e.g., \"pref_exp=; OptanonConsent=...\").",
-      "editor": "textfield",
-      "prefill": ""
+      "prefill": 20
     },
     "proxyConfiguration": {
       "title": "Proxy configuration",
       "type": "object",
-      "description": "Optional override. The actor uses Apify datacenter proxies by default; switch groups here if you need residential access.",
+      "description": "Optional proxy settings. Uses Apify datacenter proxies by default.",
       "editor": "proxy"
     }
   },

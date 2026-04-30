@@ -1,33 +1,25 @@
 # Learn4Good Jobs Scraper
 
-Extract comprehensive job listings from Learn4Good with ease. Collect job titles, companies, locations, posting dates, and detailed descriptions at scale. Perfect for recruitment research, job market analysis, and employment data monitoring.
+Collect structured job listings from Learn4Good with keyword/location search or direct result URLs. The actor captures listing data plus detail-page fields such as descriptions, posting dates, and expiry metadata for reliable job research datasets.
 
 ## Features
 
-- **Comprehensive Data Extraction** — Capture complete job information including titles, companies, locations, and full descriptions
-- **Flexible Search Options** — Search by keywords, locations, or use direct Learn4Good URLs
-- **Smart Pagination** — Automatically navigate through multiple pages to reach your desired result count
-- **Date Filtering** — Filter jobs by posting date (24 hours, 7 days, 30 days, or anytime)
-- **Detailed Job Descriptions** — Optionally extract full job descriptions from individual posting pages
-- **Configurable Limits** — Control data volume with customizable job and page limits
-- **Reliable Data Collection** — Built-in proxy support ensures consistent scraping performance
+- **Structured Job Records** — Extract title, company, location, posting date, description, and source URL
+- **Flexible Input** — Run by `keyword` + `location` or pass a direct `startUrl`
+- **Pagination Support** — Continue through multiple pages until reaching your limits
+- **Cleaner Output** — Skips duplicate records and removes null/empty fields
+- **Run Metadata** — Includes context fields such as search keyword, search location, and scrape timestamp
 
 ## Use Cases
 
 ### Recruitment Intelligence
-Build comprehensive job databases for recruitment agencies and talent acquisition teams. Track new openings across multiple locations and industries to identify hiring trends and opportunities.
+Build fresh job datasets for sourcing, outreach planning, and regional hiring analysis.
 
-### Job Market Research
-Analyze employment trends, salary patterns, and skill requirements across different regions. Gather data for market reports, competitive analysis, and workforce planning.
+### Job Market Monitoring
+Track role demand by keyword and geography over repeated scheduled runs.
 
-### Career Planning
-Monitor job availability in specific fields or locations. Help job seekers identify opportunities, understand market demand, and track hiring patterns over time.
-
-### Competitive Analysis
-Track competitor hiring activities and expansion plans. Identify growing companies and emerging job markets by monitoring posting frequency and job types.
-
-### Academic Research
-Collect employment data for labor market studies, economic research, and workforce development analysis. Build datasets for statistical analysis and trend identification.
+### Competitive Research
+Watch openings by sector and location to understand hiring velocity and expansion patterns.
 
 ---
 
@@ -35,86 +27,69 @@ Collect employment data for labor market studies, economic research, and workfor
 
 | Parameter | Type | Required | Default | Description |
 |-----------|------|----------|---------|-------------|
-| `startUrl` | String | No | — | Direct Learn4Good search URL (overrides keyword/location when provided) |
-| `keyword` | String | No | `"nurse"` | Search term for job listings |
-| `location` | String | No | `"New York"` | Location filter for job search |
-| `posted_date` | String | No | `"anytime"` | Filter by posting date: `24h`, `7d`, `30d`, or `anytime` |
-| `collectDetails` | Boolean | No | `true` | Extract full job descriptions from detail pages |
-| `maxJobs` | Integer | No | `200` | Maximum number of jobs to collect |
-| `maxPages` | Integer | No | `25` | Maximum number of listing pages to crawl |
-| `cookies` | String | No | — | Optional custom cookie header for requests |
-| `proxyConfiguration` | Object | No | Datacenter | Custom proxy settings (uses Apify datacenter proxies by default) |
+| `startUrl` | String | No | — | Direct Learn4Good search URL (overrides keyword/location) |
+| `keyword` | String | No | `"nurse"` | Job keyword used when `startUrl` is not provided |
+| `location` | String | No | `"New York"` | Location filter used when `startUrl` is not provided |
+| `maxJobs` | Integer | No | `20` | Maximum number of jobs to save |
+| `maxPages` | Integer | No | `25` | Maximum number of result pages to visit |
+| `proxyConfiguration` | Object | No | Apify datacenter | Optional proxy override |
 
 ---
 
 ## Output Data
 
-Each job listing in the dataset contains:
+Each dataset item can contain:
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `title` | String | Job title or position name |
-| `company` | String | Employer or company name |
-| `location` | String | Job location (city, state, or country) |
-| `date_posted` | String | Date when the job was posted |
-| `description_html` | String | Full job description in HTML format |
-| `description_text` | String | Job description in plain text |
-| `url` | String | Direct URL to the job posting |
+| `title` | String | Job title |
+| `company` | String | Hiring company |
+| `location` | String | Job location |
+| `salary` | String | Salary text when available |
+| `job_type` | String | Employment type when available |
+| `date_posted` | String | Posting date when available |
+| `valid_through` | String | Expiry date when available |
+| `description_html` | String | Description in HTML format |
+| `description_text` | String | Description in plain text |
+| `job_id` | String | Job ID parsed from URL |
+| `url` | String | Job detail URL |
+| `search_keyword` | String | Keyword used for this run |
+| `search_location` | String | Location used for this run |
+| `source` | String | Source site label |
+| `scraped_at` | String | ISO timestamp when record was saved |
 
 ---
 
 ## Usage Examples
 
-### Basic Job Search
+### Basic Keyword Search
 
-Search for nursing jobs in New York:
+```json
+{
+    "keyword": "software engineer",
+    "location": "United States",
+    "maxJobs": 20
+}
+```
+
+### Direct URL Run
+
+```json
+{
+    "startUrl": "https://www.learn4good.com/jobs/index.php?controller=job_list&action=display_search_results&page_number=1&what=data+analyst",
+    "maxJobs": 50,
+    "maxPages": 10
+}
+```
+
+### Large Monitoring Run
 
 ```json
 {
     "keyword": "nurse",
     "location": "New York",
-    "posted_date": "7d",
-    "maxJobs": 100
-}
-```
-
-### Technology Jobs Search
-
-Find recent software engineering positions:
-
-```json
-{
-    "keyword": "software engineer",
-    "location": "San Francisco",
-    "posted_date": "24h",
-    "collectDetails": true,
-    "maxJobs": 50
-}
-```
-
-### Direct URL Scraping
-
-Use a specific Learn4Good search URL:
-
-```json
-{
-    "startUrl": "https://www.learn4good.com/jobs/language/english/list/",
-    "collectDetails": true,
-    "maxJobs": 200
-}
-```
-
-### Large-Scale Data Collection
-
-Collect extensive job listings with pagination control:
-
-```json
-{
-    "keyword": "data analyst",
-    "posted_date": "30d",
-    "maxJobs": 500,
-    "maxPages": 50,
-    "collectDetails": false
+    "maxJobs": 200,
+    "maxPages": 25
 }
 ```
 
@@ -124,13 +99,19 @@ Collect extensive job listings with pagination control:
 
 ```json
 {
-    "title": "Registered Nurse - ICU",
+    "title": "Registered Nurse",
     "company": "City Medical Center",
-    "location": "New York, NY",
-    "date_posted": "2026-01-20",
-    "description_html": "<p>Join our team as a Registered Nurse in our Intensive Care Unit...</p>",
-    "description_text": "Join our team as a Registered Nurse in our Intensive Care Unit. We are seeking experienced RNs with critical care experience...",
-    "url": "https://www.learn4good.com/jobs/registered-nurse-icu-12345"
+    "location": "New York, United States",
+    "job_type": "Full Time",
+    "date_posted": "2026-01-17",
+    "valid_through": "2026-07-16",
+    "description_text": "Join our team as a Registered Nurse...",
+    "job_id": "4795940857",
+    "url": "https://www.learn4good.com/jobs/tucson/arizona/healthcare/4795940857/e/",
+    "search_keyword": "nurse",
+    "search_location": "New York",
+    "source": "learn4good",
+    "scraped_at": "2026-04-30T10:05:00.000Z"
 }
 ```
 
@@ -138,91 +119,67 @@ Collect extensive job listings with pagination control:
 
 ## Tips for Best Results
 
-### Choose Effective Keywords
-- Use specific job titles for targeted results (e.g., "software engineer" vs "tech")
-- Combine keywords with locations for regional searches
-- Test different keyword variations to maximize coverage
+### Start Small
+- Run with `maxJobs: 20` first to validate inputs quickly.
 
-### Optimize Collection Settings
-- Start with smaller limits (50-100 jobs) for testing
-- Enable `collectDetails` for comprehensive data, disable for faster scraping
-- Set `maxPages` to prevent excessive crawling on broad searches
+### Use Specific Keywords
+- Precise titles such as `icu nurse` or `frontend developer` typically return cleaner results.
 
-### Use Date Filters Wisely
-- Use `24h` or `7d` for fresh job postings
-- Use `30d` for broader market analysis
-- Use `anytime` for comprehensive historical data
-
-### Monitor Performance
-- Balance `maxJobs` and `maxPages` based on your needs
-- Disable `collectDetails` if descriptions aren't required
-- Use appropriate proxy configuration for reliable access
+### Tune Page Limits
+- Increase `maxPages` only when you need broader coverage.
 
 ---
 
 ## Integrations
 
-Connect your job data with popular tools:
+Connect output with:
 
-- **Google Sheets** — Export for analysis and sharing
-- **Airtable** — Build searchable recruitment databases
-- **Slack** — Get notifications for new job postings
-- **Webhooks** — Send data to custom endpoints
-- **Make** — Create automated recruitment workflows
-- **Zapier** — Trigger actions based on new jobs
+- **Google Sheets** — Share and filter job datasets
+- **Airtable** — Build searchable hiring trackers
+- **Webhooks** — Push new data to your systems
+- **Make** — Automate enrichment workflows
+- **Zapier** — Trigger downstream actions
 
 ### Export Formats
 
-Download your data in multiple formats:
-
-- **JSON** — For developers and API integrations
-- **CSV** — For spreadsheet analysis and reporting
-- **Excel** — For business intelligence tools
-- **XML** — For system integrations
+- **JSON** — API and programmatic workflows
+- **CSV** — Spreadsheet analysis
+- **Excel** — Reporting
+- **XML** — System integrations
 
 ---
 
 ## Frequently Asked Questions
 
-### How many jobs can I collect?
-You can collect up to the limit specified in `maxJobs`. The actor will automatically handle pagination to reach your target. For unlimited collection, leave `maxJobs` empty.
+### Can I run without a keyword?
+Yes. Provide a `startUrl` directly.
 
-### Does the scraper work with direct URLs?
-Yes, you can provide a Learn4Good search URL in the `startUrl` field. This will override keyword and location filters.
+### Why are some fields missing in a row?
+Some listings do not publish every field. The actor stores only non-empty values.
 
-### What happens if I disable collectDetails?
-The scraper will only extract data visible on listing pages, which is faster but may result in shorter or missing descriptions. Enable it for complete job information.
+### Does it avoid duplicates?
+Yes. Duplicate records are skipped during the run.
 
-### Can I filter by posting date?
-Yes, use the `posted_date` parameter to filter jobs posted within the last 24 hours, 7 days, 30 days, or anytime.
+### How do I collect more data?
+Increase `maxJobs` and `maxPages`.
 
-### How does pagination work?
-The actor automatically navigates through result pages until it reaches `maxJobs` or `maxPages` limit, whichever comes first.
-
-### What if some fields are empty?
-Some jobs may not include all fields (e.g., company name or exact posting date). The scraper extracts all available information from the source.
-
-### Do I need proxies?
-The actor uses Apify datacenter proxies by default, which work well for most cases. You can configure custom proxies if needed.
-
-### How long does a typical run take?
-Runtime depends on the number of jobs and whether `collectDetails` is enabled. Expect 1-3 minutes per 100 jobs with details, faster without.
+### Is proxy configuration required?
+No. Default proxy behavior is already configured, but you can override it.
 
 ---
 
 ## Support
 
-For issues or feature requests, contact support through the Apify Console.
+For issues or feature requests, use the Apify Console.
 
 ### Resources
 
 - [Apify Documentation](https://docs.apify.com/)
 - [API Reference](https://docs.apify.com/api/v2)
 - [Scheduling Runs](https://docs.apify.com/schedules)
-- [Integrations](https://docs.apify.com/integrations)
 
 ---
 
 ## Legal Notice
 
-This actor is designed for legitimate data collection purposes. Users are responsible for ensuring compliance with Learn4Good's terms of service and applicable laws. Use data responsibly and respect rate limits.
+Use this actor in compliance with Learn4Good terms and applicable laws.
