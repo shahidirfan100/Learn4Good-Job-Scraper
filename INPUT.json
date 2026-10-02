@@ -1,5 +1,9 @@
 {
-  "keyword": "nurse",
-  "location": "New York",
-  "maxJobs": 20
+    "startUrl": "https://www.learn4good.com/jobs/language/english/search/administrative/",
+    "maxJobs": 5,
+    "maxPages": 3,
+    "collectDetails": true,
+    "proxyConfiguration": {
+        "useApifyProxy": false
+    }
 }

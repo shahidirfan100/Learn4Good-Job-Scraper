@@ -1,45 +1,53 @@
 {
-  "title": "Learn4Good Jobs Scraper",
-  "description": "Scrape jobs from Learn4Good using keyword/location search or a direct search URL.",
-  "type": "object",
-  "schemaVersion": 1,
-  "properties": {
-    "startUrl": {
-      "title": "Start URL",
-      "type": "string",
-      "description": "Direct Learn4Good search URL. If provided, it overrides keyword and location.",
-      "editor": "textfield",
-      "prefill": ""
+    "title": "Learn4Good Jobs Scraper",
+    "description": "Collect public Learn4Good job listings from a Learn4Good jobs URL.",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+        "startUrl": {
+            "title": "Jobs URL",
+            "type": "string",
+            "description": "Learn4Good jobs URL to collect, for example a category, search results, or listing page.",
+            "editor": "textfield",
+            "prefill": "https://www.learn4good.com/jobs/language/english/search/administrative/"
+        },
+        "maxJobs": {
+            "title": "Max jobs",
+            "type": "integer",
+            "description": "Maximum number of unique jobs to save.",
+            "minimum": 1,
+            "maximum": 1000,
+            "default": 20,
+            "editor": "number",
+            "prefill": 20
+        },
+        "maxPages": {
+            "title": "Max pages",
+            "type": "integer",
+            "description": "Maximum number of result pages to inspect.",
+            "minimum": 1,
+            "maximum": 500,
+            "default": 25,
+            "editor": "number",
+            "prefill": 25
+        },
+        "collectDetails": {
+            "title": "Collect detail pages",
+            "type": "boolean",
+            "description": "Try to enrich list records with company, full description, salary, posting date, and expiry fields. List data is retained when a detail page is unavailable.",
+            "default": true,
+            "prefill": true,
+            "editor": "checkbox"
+        },
+        "proxyConfiguration": {
+            "title": "Proxy configuration",
+            "type": "object",
+            "description": "Optional Apify Proxy or custom proxy settings. Disabled by default; enable it only if you want to route requests through a proxy.",
+            "editor": "proxy",
+            "default": {
+                "useApifyProxy": false
+            }
+        }
     },
-    "keyword": {
-      "title": "Keyword",
-      "type": "string",
-      "description": "Search term(s) for jobs when Start URL is not provided.",
-      "editor": "textfield",
-      "prefill": "nurse"
-    },
-    "location": {
-      "title": "Location",
-      "type": "string",
-      "description": "Optional location filter when Start URL is not provided.",
-      "editor": "textfield",
-      "prefill": "New York"
-    },
-    "maxJobs": {
-      "title": "Max jobs",
-      "type": "integer",
-      "description": "Maximum number of jobs to collect.",
-      "minimum": 1,
-      "default": 20,
-      "editor": "number",
-      "prefill": 20
-    },
-    "proxyConfiguration": {
-      "title": "Proxy configuration",
-      "type": "object",
-      "description": "Optional proxy settings. Uses Apify datacenter proxies by default.",
-      "editor": "proxy"
-    }
-  },
-  "required": []
+    "required": ["startUrl"]
 }
